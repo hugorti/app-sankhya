@@ -43,6 +43,35 @@ export default function RootLayout() {
           animation: 'fade'
         }} 
       />
+      {/* Novas telas */}
+      <Stack.Screen 
+        name="separacao" 
+        options={{ 
+          title: 'Separação',
+          animation: 'slide_from_right'
+        }} 
+      />
+      <Stack.Screen 
+        name="conferencia" 
+        options={{ 
+          title: 'Conferência',
+          animation: 'slide_from_right'
+        }} 
+      />
+      <Stack.Screen 
+        name="estoque" 
+        options={{ 
+          title: 'Estoque',
+          animation: 'slide_from_right'
+        }} 
+      />
+      <Stack.Screen 
+        name="romaneio" 
+        options={{ 
+          title: 'Romaneio',
+          animation: 'slide_from_right'
+        }} 
+      />
     </Stack>
   );
 }

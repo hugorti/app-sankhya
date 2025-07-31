@@ -58,6 +58,7 @@ api.interceptors.response.use(
  * @param password Senha
  * @returns Objeto com dados da sessão
  */
+// services/api.ts (apenas a parte relevante modificada)
 export const login = async (username: string, password: string): Promise<LoginResponse> => {
   const xmlRequest = `<?xml version="1.0" encoding="ISO-8859-1"?>
 <serviceRequest serviceName="MobileLoginSP.login">
@@ -77,7 +78,7 @@ export const login = async (username: string, password: string): Promise<LoginRe
       }
     );
 
-    console.log('Resposta bruta:', response.data);
+    // Removido o console.log da resposta bruta
 
     if (typeof response.data !== 'string' || !response.data.includes('serviceResponse')) {
       throw new Error('Resposta inválida do servidor');
@@ -86,10 +87,7 @@ export const login = async (username: string, password: string): Promise<LoginRe
     const result = parser.parse(response.data);
 
     if (!result.serviceResponse || result.serviceResponse['@_status'] !== "1") {
-      const errorMsg = result.serviceResponse?.statusMessage 
-        ? Buffer.from(result.serviceResponse.statusMessage, 'base64').toString('utf-8')
-        : 'Credenciais inválidas';
-      throw new Error(errorMsg);
+      throw new Error('Credenciais inválidas'); // Mensagem genérica
     }
 
     if (!result.serviceResponse.responseBody) {
@@ -103,14 +101,14 @@ export const login = async (username: string, password: string): Promise<LoginRe
     };
 
   } catch (error) {
-    console.error('Erro detalhado:', error);
+    // Simplificando o tratamento de erro
     if (axios.isAxiosError(error)) {
       if (error.code === 'ECONNABORTED') {
-        throw new Error('Timeout: O servidor não respondeu a tempo');
+        throw new Error('Servidor não respondeu. Verifique sua conexão.');
       }
-      throw new Error(`Erro de conexão: ${error.message}`);
+      throw new Error('Erro ao conectar ao servidor');
     }
-    throw error;
+    throw new Error('Credenciais inválidas'); // Mensagem padrão para outros erros
   }
 };
 
