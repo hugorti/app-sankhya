@@ -1,13 +1,15 @@
-import React, { useState } from 'react';
-import { View, TextInput, StyleSheet, Text, ActivityIndicator, Alert, Platform, Button } from 'react-native';
+// app/login.tsx
+import { useState } from 'react';
+import { View, TextInput, StyleSheet, Text, ActivityIndicator, Alert, TouchableOpacity } from 'react-native';
 import { useRouter } from 'expo-router';
-import { login } from '../services/api';
+import { useSession } from '../hooks/useSession';
 
 export default function LoginScreen() {
   const [username, setUsername] = useState('HUGOTI');
   const [password, setPassword] = useState('Pal.135563');
-  const [loading, setLoading] = useState(false);
+  const [secureTextEntry, setSecureTextEntry] = useState(true);
   const router = useRouter();
+  const { login, loading, error } = useSession();
 
   const handleLogin = async () => {
     if (!username.trim() || !password.trim()) {
@@ -15,115 +17,170 @@ export default function LoginScreen() {
       return;
     }
 
-    setLoading(true);
     try {
-      const response = await login(username, password);
-      
-      if (Platform.OS === 'web') {
-        localStorage.setItem('sankhya_session', JSON.stringify(response));
-      }
-      
-      router.push({
-        pathname: '/(tabs)',
-        params: { 
-          sessionData: JSON.stringify(response),
-          username: username 
-        }
-      });
-      
+      await login(username, password);
+      // O redirecionamento agora é tratado pelo hook useSession
     } catch (error: any) {
-      let errorMessage = error.message || 'Falha no login. Verifique suas credenciais e a conexão.';
-      
-      if (errorMessage.includes('Network Error') || errorMessage.includes('CORS')) {
-        errorMessage = 'Problema de conexão com o servidor. Verifique se o servidor Sankhya está configurado para aceitar requisições do seu domínio.';
-      }
-      
-      Alert.alert('Erro no Login', errorMessage);
-      console.error('Detalhes do erro:', error);
-    } finally {
-      setLoading(false);
+      handleLoginError(error);
     }
+  };
+
+  const handleLoginError = (error: Error) => {
+    let errorMessage = 'Falha no login. Verifique:\n';
+    
+    if (error.message.includes('Timeout')) {
+      errorMessage += '• O servidor demorou muito para responder\n';
+      errorMessage += '• Sua conexão com a rede\n';
+    } else if (error.message.includes('Credenciais inválidas')) {
+      errorMessage += '• Seu usuário e senha\n';
+    } else if (error.message.includes('conexão') || error.message.includes('servidor')) {
+      errorMessage += '• Sua conexão com a internet\n';
+      errorMessage += '• O endereço do servidor\n';
+    } else {
+      errorMessage += `• ${error.message}\n`;
+    }
+
+    Alert.alert('Erro no Login', errorMessage);
+    console.error('Detalhes do erro:', error);
+  };
+
+  const toggleSecureEntry = () => {
+    setSecureTextEntry(!secureTextEntry);
   };
 
   return (
     <View style={styles.container}>
-      <Text style={styles.title}>Login Sankhya</Text>
+      <Text style={styles.title}>Acesso Sankhya</Text>
       
-      <TextInput
-        style={styles.input}
-        placeholder="Usuário"
-        value={username}
-        onChangeText={setUsername}
-        autoCapitalize="none"
-        editable={!loading}
-      />
+      <View style={styles.inputContainer}>
+        <Text style={styles.label}>Usuário</Text>
+        <TextInput
+          style={styles.input}
+          placeholder="Digite seu usuário"
+          value={username}
+          onChangeText={setUsername}
+          autoCapitalize="none"
+          autoCorrect={false}
+          editable={!loading}
+        />
+      </View>
       
-      <TextInput
-        style={styles.input}
-        placeholder="Senha"
-        secureTextEntry
-        value={password}
-        onChangeText={setPassword}
-        editable={!loading}
-        onSubmitEditing={handleLogin}
-      />
+      <View style={styles.inputContainer}>
+        <Text style={styles.label}>Senha</Text>
+        <View style={styles.passwordContainer}>
+          <TextInput
+            style={[styles.input, styles.passwordInput]}
+            placeholder="Digite sua senha"
+            secureTextEntry={secureTextEntry}
+            value={password}
+            onChangeText={setPassword}
+            onSubmitEditing={handleLogin}
+            editable={!loading}
+          />
+          <TouchableOpacity onPress={toggleSecureEntry} style={styles.eyeButton}>
+            <Text style={styles.eyeIcon}>{secureTextEntry ? '👁️' : '👁️‍🗨️'}</Text>
+          </TouchableOpacity>
+        </View>
+      </View>
       
-      <Button 
-        title="Entrar" 
+      <TouchableOpacity 
+        style={[styles.button, loading && styles.buttonDisabled]}
         onPress={handleLogin}
         disabled={loading}
-      />
-      
-      {loading && <ActivityIndicator size="large" style={styles.loader} />}
-      
-      {Platform.OS === 'web' && (
-        <Text style={styles.note}>
-          Nota: Se estiver com problemas de CORS, tente acessar via app mobile ou configure o proxy no servidor Sankhya.
-        </Text>
+      >
+        {loading ? (
+          <ActivityIndicator color="#fff" />
+        ) : (
+          <Text style={styles.buttonText}>Entrar</Text>
+        )}
+      </TouchableOpacity>
+
+      {error && !loading && (
+        <Text style={styles.errorText}>{error}</Text>
       )}
+
+      <Text style={styles.helpText}>
+        Problemas para acessar? Verifique:
+        {'\n'}• Sua conexão com a internet
+        {'\n'}• O endereço do servidor
+        {'\n'}• Seu usuário e senha
+      </Text>
     </View>
   );
 }
-
 
 const styles = StyleSheet.create({
   container: {
     flex: 1,
     justifyContent: 'center',
-    padding: 20,
-    maxWidth: 400,
-    width: '100%',
-    alignSelf: 'center',
+    padding: 24,
+    backgroundColor: '#f5f5f5',
   },
   title: {
-    fontSize: 24,
+    fontSize: 28,
     fontWeight: 'bold',
-    marginBottom: 30,
+    marginBottom: 32,
     textAlign: 'center',
+    color: '#2c3e50',
+  },
+  inputContainer: {
+    marginBottom: 20,
+  },
+  label: {
+    marginBottom: 8,
+    fontSize: 16,
+    color: '#34495e',
   },
   input: {
     height: 50,
     borderWidth: 1,
-    borderColor: '#ccc',
+    borderColor: '#bdc3c7',
     borderRadius: 8,
-    paddingHorizontal: 15,
-    marginBottom: 20,
+    paddingHorizontal: 16,
     fontSize: 16,
+    backgroundColor: '#fff',
+  },
+  passwordContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  passwordInput: {
+    flex: 1,
+  },
+  eyeButton: {
+    position: 'absolute',
+    right: 15,
+  },
+  eyeIcon: {
+    fontSize: 20,
   },
   button: {
     height: 50,
     borderRadius: 8,
     justifyContent: 'center',
     alignItems: 'center',
-    backgroundColor: '#2E86C1',
-  },
-  loader: {
+    backgroundColor: '#3498db',
     marginTop: 20,
   },
-  note: {
-    marginTop: 20,
-    color: '#666',
+  buttonDisabled: {
+    backgroundColor: '#95a5a6',
+  },
+  buttonText: {
+    color: '#fff',
+    fontSize: 18,
+    fontWeight: '600',
+  },
+  errorText: {
+    color: '#e74c3c',
     textAlign: 'center',
-    fontSize: 12,
+    marginTop: 15,
+    fontSize: 14,
+  },
+  helpText: {
+    marginTop: 30,
+    color: '#7f8c8d',
+    textAlign: 'center',
+    fontSize: 13,
+    lineHeight: 20,
   },
 });

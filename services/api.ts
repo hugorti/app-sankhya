@@ -1,109 +1,178 @@
-import axios, { AxiosError } from 'axios';
-import { parseString } from 'xml2js';
+// services/api.ts
+import axios, { AxiosError, AxiosInstance } from 'axios';
 import { Buffer } from 'buffer';
+import { XMLParser } from 'fast-xml-parser';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
-// Interface completa para a resposta da API
-interface SankhyaApiResponse {
-  serviceResponse?: {
-    $: {
-      serviceName: string;
-      status: string;
-      pendingPrinting: string;
-      transactionId: string;
-    };
-    responseBody?: Array<{
-      jsessionid?: string[];
-      idusu?: string[];
-      callID?: string[];
-    }>;
-    statusMessage?: string[];
-  };
-}
+const parser = new XMLParser({
+  attributeNamePrefix: '@_',
+  ignoreAttributes: false,
+  parseTagValue: true,
+  trimValues: true,
+});
 
 interface LoginResponse {
-  jsessionid?: string;
-  idusu?: string;
-  callID?: string;
-  error?: string;
+  jsessionid: string;
+  idusu: string;
+  callID: string;
 }
 
+// Configuração base do axios
+const api: AxiosInstance = axios.create({
+  baseURL: 'http://179.127.28.188:55180/mge/',
+  timeout: 15000,
+  headers: {
+    'Content-Type': 'application/xml; charset=ISO-8859-1',
+    'Accept': 'application/xml'
+  }
+});
+
+// Interceptador para incluir o JSESSIONID automaticamente
+api.interceptors.request.use(async (config) => {
+  const session = await AsyncStorage.getItem('sankhya_session');
+  if (session) {
+    const { jsessionid } = JSON.parse(session);
+    if (jsessionid) {
+      config.headers.Cookie = `JSESSIONID=${jsessionid}`;
+    }
+  }
+  return config;
+});
+
+// Interceptador para tratar erros de autenticação
+api.interceptors.response.use(
+  (response) => response,
+  (error: AxiosError) => {
+    if (error.response?.status === 401) {
+      // Sessão expirada - limpa o storage e redireciona
+      AsyncStorage.removeItem('sankhya_session');
+      // Você pode adicionar um evento global ou usar React Navigation para redirecionar
+    }
+    return Promise.reject(error);
+  }
+);
+
+/**
+ * Realiza o login no sistema Sankhya
+ * @param username Nome de usuário
+ * @param password Senha
+ * @returns Objeto com dados da sessão
+ */
 export const login = async (username: string, password: string): Promise<LoginResponse> => {
   const xmlRequest = `<?xml version="1.0" encoding="ISO-8859-1"?>
 <serviceRequest serviceName="MobileLoginSP.login">
   <requestBody>
-    <NOMUSU>${username}</NOMUSU>
-    <INTERNO>${password}</INTERNO>
+    <NOMUSU>${escapeXml(username)}</NOMUSU>
+    <INTERNO>${escapeXml(password)}</INTERNO>
   </requestBody>
 </serviceRequest>`;
 
   try {
-    const response = await axios.post('http://192.168.0.103:8380/mge/services.sbr?serviceName=MobileLoginSP.login', xmlRequest, {
-      headers: {
-        'Content-Type': 'application/xml; charset=ISO-8859-1',
-      },
-    });
-
-    return new Promise((resolve, reject) => {
-      parseString(response.data, (err: Error | null, result: unknown) => {
-        if (err) {
-          reject(err);
-          return;
-        }
-
-        // Verificação de tipo segura
-        const apiResponse = result as SankhyaApiResponse;
-        
-        if (!apiResponse?.serviceResponse) {
-          reject(new Error('Resposta da API em formato inválido'));
-          return;
-        }
-
-        const sr = apiResponse.serviceResponse;
-
-        // Resposta de erro
-        if (sr.$?.status === "0") {
-          const errorMessage = sr.statusMessage?.[0] 
-            ? Buffer.from(sr.statusMessage[0], 'base64').toString('utf-8')
-            : 'Erro desconhecido';
-          reject(new Error(errorMessage));
-          return;
-        }
-
-        // Resposta de sucesso
-        if (sr.$?.status === "1" && sr.responseBody?.[0]) {
-          const rb = sr.responseBody[0];
-          resolve({
-            jsessionid: rb.jsessionid?.[0],
-            idusu: rb.idusu?.[0],
-            callID: rb.callID?.[0],
-          });
-          return;
-        }
-
-        reject(new Error('Formato de resposta desconhecido'));
-      });
-    });
-  } catch (error) {
-    const axiosError = error as AxiosError;
-    
-    if (axiosError.response?.data) {
-      try {
-        const errorResponse = await new Promise<SankhyaApiResponse>((resolve, reject) => {
-          parseString(axiosError.response?.data as string, (err, result) => {
-            if (err) reject(err);
-            else resolve(result as SankhyaApiResponse);
-          });
-        });
-
-        if (errorResponse.serviceResponse?.statusMessage?.[0]) {
-          const errorMsg = Buffer.from(errorResponse.serviceResponse.statusMessage[0], 'base64').toString('utf-8');
-          throw new Error(errorMsg);
-        }
-      } catch (parseError) {
-        console.error("Erro ao analisar resposta de erro:", parseError);
+    const response = await api.post(
+      'services.sbr?serviceName=MobileLoginSP.login',
+      xmlRequest,
+      {
+        responseType: 'text',
+        transformResponse: [data => data]
       }
+    );
+
+    console.log('Resposta bruta:', response.data);
+
+    if (typeof response.data !== 'string' || !response.data.includes('serviceResponse')) {
+      throw new Error('Resposta inválida do servidor');
     }
-    
-    throw new Error(axiosError.message || 'Falha na comunicação com o servidor');
+
+    const result = parser.parse(response.data);
+
+    if (!result.serviceResponse || result.serviceResponse['@_status'] !== "1") {
+      const errorMsg = result.serviceResponse?.statusMessage 
+        ? Buffer.from(result.serviceResponse.statusMessage, 'base64').toString('utf-8')
+        : 'Credenciais inválidas';
+      throw new Error(errorMsg);
+    }
+
+    if (!result.serviceResponse.responseBody) {
+      throw new Error('Estrutura de resposta incompleta');
+    }
+
+    return {
+      jsessionid: result.serviceResponse.responseBody.jsessionid || '',
+      idusu: (result.serviceResponse.responseBody.idusu || '').trim(),
+      callID: result.serviceResponse.responseBody.callID || ''
+    };
+
+  } catch (error) {
+    console.error('Erro detalhado:', error);
+    if (axios.isAxiosError(error)) {
+      if (error.code === 'ECONNABORTED') {
+        throw new Error('Timeout: O servidor não respondeu a tempo');
+      }
+      throw new Error(`Erro de conexão: ${error.message}`);
+    }
+    throw error;
   }
 };
+
+/**
+ * Realiza logout no sistema Sankhya
+ */
+export const logout = async (): Promise<void> => {
+  try {
+    await api.post('services.sbr?serviceName=MobileLoginSP.logout');
+  } catch (error) {
+    console.warn('Erro durante logout remoto:', error);
+  }
+};
+
+/**
+ * Método genérico para consultas ao Sankhya
+ * @param serviceName Nome do serviço
+ * @param requestBody Corpo da requisição em XML
+ */
+export const query = async (serviceName: string, requestBody: string): Promise<any> => {
+  const xmlRequest = `<?xml version="1.0" encoding="ISO-8859-1"?>
+<serviceRequest serviceName="${escapeXml(serviceName)}">
+  <requestBody>
+    ${requestBody}
+  </requestBody>
+</serviceRequest>`;
+
+  const response = await api.post(
+    `services.sbr?serviceName=${encodeURIComponent(serviceName)}`,
+    xmlRequest,
+    {
+      responseType: 'text',
+      transformResponse: [data => data]
+    }
+  );
+
+  const result = parser.parse(response.data);
+  
+  if (!result.serviceResponse || result.serviceResponse['@_status'] !== "1") {
+    const errorMsg = result.serviceResponse?.statusMessage 
+      ? Buffer.from(result.serviceResponse.statusMessage, 'base64').toString('utf-8')
+      : 'Erro na requisição';
+    throw new Error(errorMsg);
+  }
+
+  return result.serviceResponse.responseBody;
+};
+
+/**
+ * Escapa caracteres especiais para XML
+ */
+function escapeXml(unsafe: string): string {
+  return unsafe.replace(/[<>&'"]/g, (c) => {
+    switch (c) {
+      case '<': return '&lt;';
+      case '>': return '&gt;';
+      case '&': return '&amp;';
+      case '\'': return '&apos;';
+      case '"': return '&quot;';
+      default: return c;
+    }
+  });
+}
+
+export default api;
