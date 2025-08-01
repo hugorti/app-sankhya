@@ -38,15 +38,15 @@ export default function RootLayout() {
       />
       <Stack.Screen 
         name="(tabs)" 
-        options={{ 
+        options={{
           headerShown: false,
           animation: 'fade'
         }} 
       />
-      {/* Novas telas */}
       <Stack.Screen 
         name="separacao" 
-        options={{ 
+        options={{
+          headerShown: false,
           title: 'Separação',
           animation: 'slide_from_right'
         }} 
@@ -54,13 +54,15 @@ export default function RootLayout() {
       <Stack.Screen 
         name="conferencia" 
         options={{ 
+          headerShown: false,
           title: 'Conferência',
           animation: 'slide_from_right'
         }} 
       />
       <Stack.Screen 
         name="estoque" 
-        options={{ 
+        options={{
+          headerShown: false,
           title: 'Estoque',
           animation: 'slide_from_right'
         }} 

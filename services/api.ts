@@ -19,6 +19,7 @@ interface LoginResponse {
 
 // Configuração base do axios
 const api: AxiosInstance = axios.create({
+  //baseURL: 'http://45.186.217.65:8180/mge/',
   baseURL: 'http://179.127.28.188:55180/mge/',
   timeout: 15000,
   headers: {
@@ -112,15 +113,79 @@ export const login = async (username: string, password: string): Promise<LoginRe
   }
 };
 
-/**
- * Realiza logout no sistema Sankhya
- */
 export const logout = async (): Promise<void> => {
   try {
     await api.post('services.sbr?serviceName=MobileLoginSP.logout');
   } catch (error) {
     console.warn('Erro durante logout remoto:', error);
   }
+};
+
+// Lista /api.ts
+export const queryJson = async (serviceName: string, requestBody: object): Promise<any> => {
+  const response = await api.post(
+    `service.sbr?serviceName=${encodeURIComponent(serviceName)}&outputType=json`,
+    {
+      requestBody: requestBody // Envolva o corpo da requisição em requestBody
+    },
+    {
+      headers: {
+        'Content-Type': 'application/json',
+      }
+    }
+  );
+
+  if (response.data.status !== "1") {
+    const errorMsg = response.data.statusMessage || 'Erro na requisição';
+    throw new Error(typeof errorMsg === 'string' ? errorMsg : 'Erro desconhecido');
+  }
+
+  return response.data.responseBody;
+};
+
+// Adicione esta nova função no seu arquivo de serviços (api.ts)
+export const salvarConferenciaAPI = async (data: {
+  NUNOTA: number;
+  ORDEMCARGA: number;
+  CONFERENTE: string;
+  DESCRICAO: string;
+  VOLUMES: number;
+}) => {
+  const requestBody = {
+    serviceName: "CRUDServiceProvider.saveRecord",
+    requestBody: {
+      dataSet: {
+        rootEntity: "AD_EXPEDICAODASH",
+        includePresentationFields: "N",
+        dataRow: {
+          localFields: {
+            NUNOTA: { "$": data.NUNOTA },
+            CONFERENTE: { "$": data.CONFERENTE },
+            DESCRICAO: { "$": data.DESCRICAO },
+            ORDEMCARGA: { "$": data.ORDEMCARGA },
+            VOLUMES: { "$": data.VOLUMES }
+          }
+        },
+        entity: {
+          fieldset: {
+            list: "CODIGO,NUNOTA,CONFERENTE,VOLUMES"
+          }
+        }
+      }
+    }
+  };
+
+  const response = await api.post(
+    'service.sbr?serviceName=CRUDServiceProvider.saveRecord&outputType=json',
+    requestBody,
+    {
+      headers: {
+        'Content-Type': 'application/json',
+      }
+    }
+  );
+
+  return response.data;
 };
 
 /**

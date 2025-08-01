@@ -1,9 +1,9 @@
+// app/(tabs)/index.tsx
 import { View, Text, StyleSheet, TouchableOpacity, Alert } from 'react-native';
 import { useRouter } from 'expo-router';
 import { useSession } from '../../hooks/useSession';
 import { Ionicons } from '@expo/vector-icons';
-
-type AppScreens = 'separacao' | 'conferencia' | 'estoque' | 'romaneio';
+import { RootStackParamList } from '@/types/navigation';
 
 export default function HomeScreen() {
   const router = useRouter();
@@ -17,7 +17,7 @@ export default function HomeScreen() {
     }
   };
 
-  const navigateTo = (screen: AppScreens) => {
+  const navigateTo = (screen: keyof RootStackParamList) => {
     router.push(`/${screen}`);
   };
 
