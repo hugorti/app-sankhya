@@ -4,7 +4,7 @@ import { NavigatorScreenParams } from '@react-navigation/native';
 export type RootStackParamList = {
   login: undefined;
   '(tabs)': undefined;
-  separacao: undefined;
+  expedicao: undefined;
   conferencia: {
     nuseparacao: number;
     totalVolumes: number;

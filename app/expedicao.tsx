@@ -1,4 +1,4 @@
-// app/separacao.tsx
+// app/expedução.tsx
 import { View, Text, StyleSheet, ActivityIndicator, TextInput, TouchableOpacity, ScrollView } from 'react-native';
 import { useState } from 'react';
 import { useRouter } from 'expo-router';
@@ -15,7 +15,7 @@ interface DadosSeparacao {
   NUSEPARACAO: number;
 }
 
-export default function SeparacaoScreen() {
+export default function ExpedicaoScreen() {
   const { session } = useSession();
   const router = useRouter();
   const [dados, setDados] = useState<DadosSeparacao | null>(null);
@@ -75,7 +75,7 @@ export default function SeparacaoScreen() {
           NUSEPARACAO: primeiroRegistro[5]
         });
       } else {
-        setError('Nenhuma separação encontrada para os filtros informados');
+        setError('Nenhuma expedição encontrada para os filtros informados');
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Erro ao buscar dados');
@@ -106,7 +106,7 @@ export default function SeparacaoScreen() {
         <TouchableOpacity onPress={() => router.back()}>
           <Ionicons name="arrow-back" size={24} color="white" />
         </TouchableOpacity>
-        <Text style={styles.headerTitle}>Separação de Carga</Text>
+        <Text style={styles.headerTitle}>Expedição de Carga</Text>
         <View style={{ width: 24 }} />
       </View>
 
@@ -148,7 +148,7 @@ export default function SeparacaoScreen() {
           >
             <Ionicons name="search" size={24} color="white" />
             <Text style={styles.searchButtonText}>
-              {loading ? 'Buscando...' : 'Buscar Separação'}
+              {loading ? 'Buscando...' : 'Buscar pedido'}
             </Text>
           </TouchableOpacity>
         </View>
@@ -168,7 +168,7 @@ export default function SeparacaoScreen() {
 
         {dados && (
           <View style={styles.card}>
-            <Text style={styles.cardTitle}>Dados da Separação</Text>
+            <Text style={styles.cardTitle}>Dados da Expedição</Text>
             
             <View style={styles.cardRow}>
               <Ionicons name="barcode-outline" size={20} color="#4CAF50" />
@@ -228,7 +228,7 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     alignItems: 'center',
     padding: 16,
-    backgroundColor: '#6200EE',
+    backgroundColor: '#FF9800',
     paddingTop: 50,
   },
   headerTitle: {
@@ -258,7 +258,7 @@ const styles = StyleSheet.create({
   },
   searchButton: {
     flexDirection: 'row',
-    backgroundColor: '#4CAF50',
+    backgroundColor: '#FF9800',
     padding: 16,
     borderRadius: 8,
     alignItems: 'center',

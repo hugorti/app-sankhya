@@ -42,11 +42,11 @@ export default function HomeScreen() {
       <View style={styles.body}>
         <View style={styles.row}>
           <TouchableOpacity 
-            style={[styles.card, { backgroundColor: '#4CAF50' }]}
-            onPress={() => navigateTo('separacao')}
+            style={[styles.card, { backgroundColor: '#FF9800' }]}
+            onPress={() => navigateTo('expedicao')}
           >
             <Ionicons name="cube-outline" size={48} color="white" />
-            <Text style={styles.cardText}>Separação</Text>
+            <Text style={styles.cardText}>Expedição</Text>
           </TouchableOpacity>
 
           <TouchableOpacity 
@@ -60,7 +60,7 @@ export default function HomeScreen() {
 
         <View style={styles.row}>
           <TouchableOpacity 
-            style={[styles.card, { backgroundColor: '#FF9800' }]}
+            style={[styles.card, { backgroundColor: '#4CAF50' }]}
             onPress={() => navigateTo('estoque')}
           >
             <Ionicons name="archive-outline" size={48} color="white" />

@@ -44,10 +44,10 @@ export default function RootLayout() {
         }} 
       />
       <Stack.Screen 
-        name="separacao" 
+        name="expedicao" 
         options={{
           headerShown: false,
-          title: 'Separação',
+          title: 'Expedição',
           animation: 'slide_from_right'
         }} 
       />

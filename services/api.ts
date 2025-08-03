@@ -149,8 +149,11 @@ export const salvarConferenciaAPI = async (data: {
   ORDEMCARGA: number;
   CONFERENTE: string;
   DESCRICAO: string;
-  VOLUMES: number;
+  VOLUMES: string | number;
+  COMPLETA: boolean;
 }) => {
+  const situacao = data.COMPLETA ? "Conferência completa" : "Conferência com divergência";
+  
   const requestBody = {
     serviceName: "CRUDServiceProvider.saveRecord",
     requestBody: {
@@ -163,12 +166,13 @@ export const salvarConferenciaAPI = async (data: {
             CONFERENTE: { "$": data.CONFERENTE },
             DESCRICAO: { "$": data.DESCRICAO },
             ORDEMCARGA: { "$": data.ORDEMCARGA },
-            VOLUMES: { "$": data.VOLUMES }
+            VOLUMES: { "$": data.VOLUMES },
+            SITUACAO: { "$": situacao } // Adicione esta linha
           }
         },
         entity: {
           fieldset: {
-            list: "CODIGO,NUNOTA,CONFERENTE,VOLUMES"
+            list: "CODIGO,NUNOTA,CONFERENTE,VOLUMES,SITUACAO" // Atualize esta linha
           }
         }
       }

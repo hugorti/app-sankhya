@@ -34,6 +34,7 @@ interface FinalizacaoData {
   volumesFaltantes: number[];
   motivo?: string;
   completa: boolean;
+  situacao: string; // Adicionado esta linha
 }
 
 export default function ConferenciaScreen() {
@@ -120,6 +121,12 @@ export default function ConferenciaScreen() {
     carregarDados();
   }, []);
 
+  useEffect(() => {
+  if (inputValue.length === 7) {
+    handleConferir();
+  }
+  }, [inputValue]);
+
   const saveConferenciaData = async (data: ConferenciaData) => {
     try {
       await AsyncStorage.setItem(storageKey, JSON.stringify(data));
@@ -157,7 +164,7 @@ export default function ConferenciaScreen() {
 
     const volumeExistente = volumes.find(v => v.IDREV === id);
     if (!volumeExistente) {
-      Alert.alert('Não encontrado', 'IDREV não corresponde a nenhum volume');
+      Alert.alert('Não encontrado', 'Número digitado não corresponde a nenhum volume');
       setInputValue('');
       return;
     }
@@ -204,62 +211,66 @@ export default function ConferenciaScreen() {
   };
 
   const confirmarFinalizacao = async () => {
-    const faltantes = volumes
-      .filter(v => !conferidos.includes(v.IDREV))
-      .map(v => v.IDREV);
+  const faltantes = volumes
+    .filter(v => !conferidos.includes(v.IDREV))
+    .map(v => v.IDREV);
 
-    const completa = faltantes.length === 0;
-    
-    try {
-      // Salva na API
-      await salvarConferenciaAPI({
-        NUNOTA: Number(nunota),
-        ORDEMCARGA: ordemCarga,
-        CONFERENTE: session?.username || 'Usuário desconhecido',
-        DESCRICAO: completa ? 'CONFERENCIA COMPLETA' : motivo,
-        VOLUMES: conferidos.length
-      });
+  const completa = faltantes.length === 0;
+  const situacao = completa ? "Conferência completa" : "Conferência com divergência"; // Nova linha
+  const volumesFormatado = `${conferidos.length} / ${totalVolumes}`;
 
-      // Salva localmente
-      const finalizacaoLocal: FinalizacaoData = {
-        nuseparacao,
-        nunota,
-        ordemCarga,
-        usuario: session?.username || 'Usuário desconhecido',
-        dataFinalizacao: new Date().toISOString(),
-        volumesConferidos: [...conferidos],
-        volumesFaltantes: [...faltantes],
-        motivo: completa ? undefined : motivo,
-        completa
-      };
-      await saveFinalizacaoData(finalizacaoLocal);
+  try {
+    // Salva na API
+    await salvarConferenciaAPI({
+      NUNOTA: Number(nunota),
+      ORDEMCARGA: ordemCarga,
+      CONFERENTE: session?.username || 'Usuário desconhecido',
+      DESCRICAO: completa ? 'CONFERENCIA COMPLETA' : motivo,
+      VOLUMES: volumesFormatado,
+      COMPLETA: completa // Adicionado esta linha
+    });
 
-      await AsyncStorage.removeItem(storageKey);
-      setShowMotivoModal(false);
-      setMotivo('');
+    // Salva localmente
+    const finalizacaoLocal: FinalizacaoData = {
+      nuseparacao,
+      nunota,
+      ordemCarga,
+      usuario: session?.username || 'Usuário desconhecido',
+      dataFinalizacao: new Date().toISOString(),
+      volumesConferidos: [...conferidos],
+      volumesFaltantes: [...faltantes],
+      motivo: completa ? undefined : motivo,
+      completa,
+      situacao // Adicionado esta linha
+    };
+    await saveFinalizacaoData(finalizacaoLocal);
 
-      if (completa) {
-        Alert.alert(
-          'Conferência completa!',
-          `Todos os ${totalVolumes} volumes foram conferidos`,
-          [{ text: 'OK', onPress: () => router.back() }]
-        );
-      } else {
-        Alert.alert(
-          'Conferência finalizada',
-          `Conferência finalizada com ${faltantes.length} volumes faltantes.`,
-          [{ text: 'OK', onPress: () => router.back() }]
-        );
-      }
-    } catch (error) {
+    await AsyncStorage.removeItem(storageKey);
+    setShowMotivoModal(false);
+    setMotivo('');
+
+    if (completa) {
       Alert.alert(
-        'Erro',
-        'Ocorreu um erro ao salvar a conferência. Tente novamente.',
-        [{ text: 'OK' }]
+        'Conferência completa!',
+        `Todos os ${totalVolumes} volumes foram conferidos`,
+        [{ text: 'OK', onPress: () => router.back() }]
       );
-      console.error('Erro ao salvar conferência:', error);
+    } else {
+      Alert.alert(
+        'Conferência finalizada',
+        `Conferência finalizada com ${totalVolumes - conferidos.length} volumes faltantes.`,
+        [{ text: 'OK', onPress: () => router.back() }]
+      );
     }
-  };
+  } catch (error) {
+    Alert.alert(
+      'Erro',
+      'Ocorreu um erro ao salvar a conferência. Tente novamente.',
+      [{ text: 'OK' }]
+    );
+    console.error('Erro ao salvar conferência:', error);
+  }
+};
 
   const solicitarMotivo = () => {
     setShowMotivoModal(true);
@@ -338,15 +349,15 @@ export default function ConferenciaScreen() {
       <View style={styles.inputContainer}>
         <TextInput
           style={styles.input}
-          placeholder="Digite o IDREV ou número da etiqueta"
+          placeholder="Digite o número da etiqueta"
           placeholderTextColor="#999"
           keyboardType="numeric"
           value={inputValue}
           onChangeText={setInputValue}
-          onSubmitEditing={handleConferir}
           autoFocus
           autoCorrect={false}
           autoCapitalize="none"
+          maxLength={7} // Adicione isso para limitar a 7 dígitos
         />
         <TouchableOpacity
           style={styles.confirmButton} 
@@ -367,16 +378,20 @@ export default function ConferenciaScreen() {
         </TouchableOpacity>
         
         <TouchableOpacity
-          style={[
-            styles.finishButton,
-            { backgroundColor: conferidos.length === totalVolumes ? '#4CAF50' : '#2196F3' }
-          ]}
-          onPress={finalizarConferencia}
-        >
-          <Text style={styles.finishButtonText}>
-            {conferidos.length === totalVolumes ? 'Conferência Completa!' : 'Finalizar Conferência'}
-          </Text>
-        </TouchableOpacity>
+      style={[
+        styles.finishButton,
+        { 
+          backgroundColor: conferidos.length === totalVolumes ? '#4CAF50' : '#2196F3',
+          flexDirection: 'column' 
+        }
+      ]}
+      onPress={finalizarConferencia}
+    >
+      <Text style={styles.finishButtonText}>
+        {conferidos.length === totalVolumes ? 'Conferência Completa!' : 'Finalizar Conferência'}
+      </Text>
+     
+    </TouchableOpacity>
       </View>
 
       {/* Modal de motivo (com Picker) */}
@@ -390,7 +405,7 @@ export default function ConferenciaScreen() {
           <View style={styles.modalContent}>
             <Text style={styles.modalTitle}>Selecione o motivo</Text>
             <Text style={styles.modalSubtitle}>
-              {volumes.length - conferidos.length} volumes não foram conferidos
+              {totalVolumes - conferidos.length} volumes não foram conferidos
             </Text>
             
             <View style={styles.pickerContainer}>
@@ -446,14 +461,21 @@ export default function ConferenciaScreen() {
           <Text style={styles.modalSubtitle}>
             {totalVolumes - conferidos.length} volumes não conferidos (de um total de {totalVolumes})
           </Text>
+          <Text style={[
+            styles.situacaoText,
+            conferidos.length === totalVolumes ? styles.situacaoComplete : styles.situacaoDivergencia
+          ]}>
+            Situação: {conferidos.length === totalVolumes ? 'Conferência completa' : 'Conferência com divergência'}
+          </Text>
           
           <ScrollView style={styles.volumesList}>
             {volumes
               .filter(v => !conferidos.includes(v.IDREV))
-              .slice(0, totalVolumes - conferidos.length) // Garante que só mostre a quantidade correta
+              .slice(0, totalVolumes - conferidos.length)
               .map((volume, index) => (
                 <View key={index} style={styles.volumeItem}>
                   <Text style={styles.volumeText}>ID: {volume.IDREV}</Text>
+                  <Text style={styles.volumeSubText}>Etiqueta: {volume.SEQETIQUETA}</Text>
                 </View>
               ))
             }
@@ -484,12 +506,29 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: '#f5f5f5',
   },
+   situacaoText: {
+    fontSize: 16,
+    fontWeight: 'bold',
+    textAlign: 'center',
+    marginBottom: 10,
+  },
+  situacaoComplete: {
+    color: '#4CAF50',
+  },
+  situacaoDivergencia: {
+    color: '#F44336',
+  },
+  situacaoButtonText: {
+  color: 'white',
+  fontSize: 12,
+  marginTop: 4,
+},
   header: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
     padding: 16,
-    backgroundColor: '#6200EE',
+    backgroundColor: '#2196F3',
     paddingTop: 50,
   },
   headerTitle: {
@@ -652,7 +691,8 @@ const styles = StyleSheet.create({
   },
   volumesList: {
     marginBottom: 10,
-    maxHeight: '67%', // Altura máxima da lista
+    
+    maxHeight: '55%',
   },
   volumeItem: {
     padding: 10,
@@ -660,6 +700,11 @@ const styles = StyleSheet.create({
     borderBottomColor: '#eee',
   },
   volumeText: {
+    fontSize: 30,
+    fontWeight: 'bold',
+    color: '#333',
+  },
+  volumeSubText: {
     fontSize: 30,
     color: '#333',
   },
