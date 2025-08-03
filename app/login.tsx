@@ -74,7 +74,7 @@ export default function LoginScreen() {
   return (
     <View style={styles.container}>
       <View style={styles.logoContainer}>
-        <Text style={styles.title}>SANKHYA</Text>
+        <Text style={styles.title}>WMS LABOTRAT</Text>
         <Text style={styles.subtitle}>Acesso ao Sistema</Text>
       </View>
       

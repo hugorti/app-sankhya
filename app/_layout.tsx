@@ -59,10 +59,20 @@ export default function RootLayout() {
           animation: 'slide_from_right'
         }} 
       />
+
+      <Stack.Screen 
+        name="conferenciaList" 
+        options={{ 
+          headerShown: false,
+          title: 'Conferência',
+          animation: 'slide_from_right'
+        }} 
+      />
+
       <Stack.Screen 
         name="estoque" 
         options={{
-          headerShown: false,
+          headerShown: true,
           title: 'Estoque',
           animation: 'slide_from_right'
         }} 

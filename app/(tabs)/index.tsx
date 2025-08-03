@@ -29,7 +29,7 @@ export default function HomeScreen() {
     <View style={styles.container}>
       {/* Header */}
       <View style={styles.header}>
-        <Text style={styles.headerTitle}>Sankhya App</Text>
+        <Text style={styles.headerTitle}>WMS</Text>
         <View style={styles.userInfo}>
           <Text style={styles.userName}>{session.username}</Text>
           <TouchableOpacity onPress={handleLogout} style={styles.logoutButton}>
@@ -51,7 +51,7 @@ export default function HomeScreen() {
 
           <TouchableOpacity 
             style={[styles.card, { backgroundColor: '#2196F3' }]}
-            onPress={() => navigateTo('conferencia')}
+            onPress={() => navigateTo('conferenciaList')}
           >
             <Ionicons name="checkmark-done-outline" size={48} color="white" />
             <Text style={styles.cardText}>Conferência</Text>

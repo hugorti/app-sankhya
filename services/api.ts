@@ -192,6 +192,42 @@ export const salvarConferenciaAPI = async (data: {
   return response.data;
 };
 
+// Adicione esta função no seu services/api.ts
+export const deletarConferenciaAPI = async (nunota: number): Promise<any> => {
+  const xmlRequest = `<?xml version="1.0" encoding="ISO-8859-1"?>
+<serviceRequest serviceName="CRUDServiceProvider.deleteRecord">
+  <requestBody>
+    <dataSet>
+      <rootEntity>AD_EXPEDICAODASH</rootEntity>
+      <where>
+        <condition expression="NUNOTA = ${nunota}"/>
+      </where>
+    </dataSet>
+  </requestBody>
+</serviceRequest>`;
+
+  try {
+    const response = await api.post(
+      'services.sbr?serviceName=CRUDServiceProvider.removeRecord',
+      xmlRequest,
+      {
+        responseType: 'text',
+        transformResponse: [data => data]
+      }
+    );
+
+    const result = parser.parse(response.data);
+    
+    if (!result.serviceResponse || result.serviceResponse['@_status'] !== "1") {
+      throw new Error('Erro ao deletar conferência');
+    }
+
+    return result.serviceResponse.responseBody;
+  } catch (error) {
+    console.error('Erro ao deletar conferência:', error);
+    throw new Error('Erro ao deletar conferência');
+  }
+};
 /**
  * Método genérico para consultas ao Sankhya
  * @param serviceName Nome do serviço

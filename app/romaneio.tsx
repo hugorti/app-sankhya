@@ -5,6 +5,9 @@ export default function RomaneioScreen() {
   return (
     <View style={styles.container}>
       <Text style={styles.title}>Romaneio</Text>
+      <Text style={styles.subtitle}>Em desenvolvimento..</Text>
+      <Text>By: Hugo Rodrigues</Text>
+      <Text>TI LABOTRAT</Text>
     </View>
   );
 }
@@ -20,5 +23,9 @@ const styles = StyleSheet.create({
     fontSize: 32,
     fontWeight: 'bold',
     color: '#9C27B0', // Cor correspondente ao card
+  },
+  subtitle: {
+    fontSize: 20,
+    fontWeight: 'bold',
   },
 });

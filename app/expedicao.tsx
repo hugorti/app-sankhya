@@ -13,6 +13,9 @@ interface DadosSeparacao {
   NOMEPARC: string;
   TOTAL_VOLUMES: number;
   NUSEPARACAO: number;
+  VOLUMES: string | number; // Novo campo
+  STATUS: string; // Novo campo
+  CONFERENTE: string; 
 }
 
 export default function ExpedicaoScreen() {
@@ -32,33 +35,47 @@ export default function ExpedicaoScreen() {
       setError(null);
       setDados(null);
       
-      const sqlQuery = `
-        SELECT
-          '1/' + CAST(MAX(REV.SEQETIQUETA) OVER () AS VARCHAR) AS SEQETIQUETA,
-          SEP.ORDEMCARGA,
-          COI.NUCONFERENCIA,
-          PAR.NOMEPARC,
-          COUNT(*) OVER () AS TOTAL_VOLUMES,
-          SEP.NUSEPARACAO
-        FROM TGWREV REV
-        LEFT JOIN TGWSEP SEP ON REV.NUSEPARACAO = SEP.NUSEPARACAO
-        OUTER APPLY (
-          SELECT TOP 1 NUCONFERENCIA
-          FROM TGWCOI
-          WHERE SEP.NUCONFERENCIA = TGWCOI.NUCONFERENCIA
-          ORDER BY NUCONFERENCIA DESC
-        ) COI
-        LEFT JOIN TGFCAB CAB ON SEP.NUNOTA = CAB.NUNOTA
-        LEFT JOIN TGFPAR PAR ON CAB.CODPARC = PAR.CODPARC
-        WHERE SEP.ORDEMCARGA = ${ordemCarga}
-        AND CAB.NUNOTA = ${nunota}
-        GROUP BY
-          REV.SEQETIQUETA,
-          SEP.ORDEMCARGA,
-          COI.NUCONFERENCIA,
-          PAR.NOMEPARC,
-          SEP.NUSEPARACAO
-      `;
+      // Substitua a consulta SQL por esta versão corrigida
+const sqlQuery = `
+  SELECT
+    '1/' + CAST(MAX(REV.SEQETIQUETA) OVER () AS VARCHAR) AS SEQETIQUETA,
+    SEP.ORDEMCARGA,
+    COI.NUCONFERENCIA,
+    PAR.NOMEPARC,
+    COUNT(*) OVER () AS TOTAL_VOLUMES,
+    SEP.NUSEPARACAO,
+    ISNULL(EXP.VOLUMES, 0) AS VOLUMES,
+    ISNULL(EXP.SITUACAO, 'PENDENTE') AS STATUS,
+    ISNULL(EXP.CONFERENTE, 'PENDENTE') AS CONFERENTE
+  FROM TGWREV REV
+  LEFT JOIN TGWSEP SEP ON REV.NUSEPARACAO = SEP.NUSEPARACAO
+  OUTER APPLY (
+    SELECT TOP 1 NUCONFERENCIA
+    FROM TGWCOI
+    WHERE SEP.NUCONFERENCIA = TGWCOI.NUCONFERENCIA
+    ORDER BY NUCONFERENCIA DESC
+  ) COI
+  LEFT JOIN TGFCAB CAB ON SEP.NUNOTA = CAB.NUNOTA
+  LEFT JOIN TGFPAR PAR ON CAB.CODPARC = PAR.CODPARC
+  OUTER APPLY (
+    SELECT TOP 1 CODIGO, VOLUMES, SITUACAO, CONFERENTE
+    FROM AD_EXPEDICAODASH
+    WHERE SEP.ORDEMCARGA = AD_EXPEDICAODASH.ORDEMCARGA 
+    AND CAB.NUNOTA = AD_EXPEDICAODASH.NUNOTA
+    ORDER BY CODIGO DESC  -- Ordenando pelo código para pegar o registro mais recente
+  ) EXP
+  WHERE SEP.ORDEMCARGA = ${ordemCarga}
+  AND CAB.NUNOTA = ${nunota}
+  GROUP BY
+    REV.SEQETIQUETA,
+    SEP.ORDEMCARGA,
+    COI.NUCONFERENCIA,
+    PAR.NOMEPARC,
+    SEP.NUSEPARACAO,
+    EXP.VOLUMES,
+    EXP.SITUACAO,
+    EXP.CONFERENTE
+`;
 
       const result = await queryJson('DbExplorerSP.executeQuery', {
         sql: sqlQuery
@@ -72,7 +89,10 @@ export default function ExpedicaoScreen() {
           NUCONFERENCIA: primeiroRegistro[2],
           NOMEPARC: primeiroRegistro[3],
           TOTAL_VOLUMES: primeiroRegistro[4],
-          NUSEPARACAO: primeiroRegistro[5]
+          NUSEPARACAO: primeiroRegistro[5],
+          VOLUMES: primeiroRegistro[6] || 0, // Adicionando campo VOLUMES
+          STATUS: primeiroRegistro[7] || 'PENDENTE', // Adicionando campo STATUS
+          CONFERENTE: primeiroRegistro[8] || 'PENDENTE'
         });
       } else {
         setError('Nenhuma expedição encontrada para os filtros informados');
@@ -93,7 +113,10 @@ export default function ExpedicaoScreen() {
           nuseparacao: dados.NUSEPARACAO,
           totalVolumes: dados.TOTAL_VOLUMES,
           ordemCarga: dados.ORDEMCARGA,
-          nunota: nunota
+          nunota: nunota,
+          volumes: dados.VOLUMES,
+          status: dados.STATUS,
+          conferente: dados.CONFERENTE
         }
       });
     }
@@ -167,48 +190,90 @@ export default function ExpedicaoScreen() {
         )}
 
         {dados && (
-          <View style={styles.card}>
-            <Text style={styles.cardTitle}>Dados da Expedição</Text>
-            
-            <View style={styles.cardRow}>
-              <Ionicons name="barcode-outline" size={20} color="#4CAF50" />
-              <Text style={styles.cardLabel}>Etiqueta:</Text>
-              <Text style={styles.cardValue}>{dados.SEQETIQUETA}</Text>
-            </View>
-            
-            <View style={styles.cardRow}>
-              <Ionicons name="list-outline" size={20} color="#4CAF50" />
-              <Text style={styles.cardLabel}>Ordem Carga:</Text>
-              <Text style={styles.cardValue}>{dados.ORDEMCARGA}</Text>
-            </View>
-            
-            <View style={styles.cardRow}>
-              <Ionicons name="checkmark-circle-outline" size={20} color="#4CAF50" />
-              <Text style={styles.cardLabel}>Conferência:</Text>
-              <Text style={styles.cardValue}>{dados.NUCONFERENCIA}</Text>
-            </View>
-            
-            <View style={styles.cardRow}>
-              <Ionicons name="person-outline" size={20} color="#4CAF50" />
-              <Text style={styles.cardLabel}>Cliente:</Text>
-              <Text style={styles.cardValue}>{dados.NOMEPARC}</Text>
-            </View>
-            
-            <View style={styles.cardRow}>
-              <Ionicons name="cube-outline" size={20} color="#4CAF50" />
-              <Text style={styles.cardLabel}>Total Volumes:</Text>
-              <Text style={styles.cardValue}>{dados.TOTAL_VOLUMES}</Text>
-            </View>
+  <View style={styles.card}>
+    <Text style={styles.cardTitle}>Dados da Expedição</Text>
+    
+    <View style={styles.cardRow}>
+      <Ionicons name="barcode-outline" size={20} color="#4CAF50" />
+      <Text style={styles.cardLabel}>Volumes:</Text>
+      <Text style={styles.cardValue}>{dados.TOTAL_VOLUMES}</Text>
+    </View>
+    
+    <View style={styles.cardRow}>
+      <Ionicons name="list-outline" size={20} color="#4CAF50" />
+      <Text style={styles.cardLabel}>Ordem Carga:</Text>
+      <Text style={styles.cardValue}>{dados.ORDEMCARGA}</Text>
+    </View>
+    
+    <View style={styles.cardRow}>
+      <Ionicons name="checkmark-circle-outline" size={20} color="#4CAF50" />
+      <Text style={styles.cardLabel}>Conferência:</Text>
+      <Text style={styles.cardValue}>{dados.NUCONFERENCIA}</Text>
+    </View>
+    
+    <View style={styles.cardRow}>
+      <Ionicons name="person-outline" size={20} color="#4CAF50" />
+      <Text style={styles.cardLabel}>Cliente:</Text>
+      <Text style={styles.cardValue}>{dados.NOMEPARC}</Text>
+    </View>
+    
+    <View style={styles.cardRow}>
+      <Ionicons name="cube-outline" size={20} color="#4CAF50" />
+      <Text style={styles.cardLabel}>Volumes Expedidos:</Text>
+      <Text style={styles.cardValue}>{dados.VOLUMES}</Text>
+    </View>
 
-            <TouchableOpacity 
-              style={styles.conferirButton}
-              onPress={abrirConferencia}
-            >
-              <Ionicons name="checkmark-done-outline" size={24} color="white" />
-              <Text style={styles.conferirButtonText}>Iniciar Conferência</Text>
-            </TouchableOpacity>
-          </View>
-        )}
+       <View style={styles.cardRow}>
+      <Ionicons name="person-circle-outline" size={20} color="#4CAF50" />
+      <Text style={styles.cardLabel}>Conferente:</Text>
+      <Text style={[styles.cardValue, 
+        dados.CONFERENTE === 'PENDENTE' ? { color: 'orange' } : { color: '#333' }]}>
+        {dados.CONFERENTE}
+      </Text>
+    </View>
+
+    <View style={styles.cardRow}>
+      <Ionicons name="alert-circle-outline" size={20} color="#4CAF50" />
+      <Text style={styles.cardLabel}>Status:</Text>
+      <Text style={[styles.cardValue, 
+        dados.STATUS === 'FINALIZADO' ? { color: 'green' } : 
+        dados.STATUS === 'PENDENTE' ? { color: 'orange' } : 
+        { color: 'red' }]}>
+        {dados.STATUS}
+      </Text>
+    </View>
+
+    {/* Botões condicionais */}
+    {dados.STATUS === 'PENDENTE' ? (
+      <TouchableOpacity 
+        style={[styles.actionButton, { backgroundColor: '#2196F3' }]}
+        onPress={abrirConferencia}
+      >
+        <Ionicons name="play-circle-outline" size={24} color="white" />
+        <Text style={styles.actionButtonText}>INICIAR CONFERÊNCIA</Text>
+      </TouchableOpacity>
+    ) : (
+      <TouchableOpacity 
+        style={[styles.actionButton, { backgroundColor: '#D32F2F' }]}
+        onPress={abrirConferencia}
+      >
+        <Ionicons name="refresh-circle-outline" size={24} color="white" />
+        <Text style={styles.actionButtonText}>RECONTAR</Text>
+      </TouchableOpacity>
+    )}
+
+    {/* Botão adicional para finalizados */}
+    {dados.STATUS === 'FINALIZADO' && (
+      <TouchableOpacity 
+        style={[styles.actionButton, { backgroundColor: '#4CAF50', marginTop: 8 }]}
+        onPress={() => {/* Lógica para visualizar conferência */}}
+      >
+        <Ionicons name="eye-outline" size={24} color="white" />
+        <Text style={styles.actionButtonText}>VISUALIZAR CONFERÊNCIA</Text>
+      </TouchableOpacity>
+    )}
+  </View>
+)}
       </ScrollView>
     </View>
   );
@@ -221,7 +286,7 @@ const styles = StyleSheet.create({
   },
   scrollContent: {
     flexGrow: 1,
-    paddingBottom: 20, // Espaço extra no final
+    paddingBottom: 20,
   },
   header: {
     flexDirection: 'row',
@@ -230,6 +295,20 @@ const styles = StyleSheet.create({
     padding: 16,
     backgroundColor: '#FF9800',
     paddingTop: 50,
+  },
+  actionButton: {
+    flexDirection: 'row',
+    padding: 16,
+    borderRadius: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: 16,
+  },
+  actionButtonText: {
+    color: 'white',
+    fontWeight: 'bold',
+    fontSize: 16,
+    marginLeft: 8,
   },
   headerTitle: {
     fontSize: 20,
@@ -316,7 +395,7 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     color: '#555',
     marginLeft: 8,
-    width: 100,
+    width: 120,
   },
   cardValue: {
     fontWeight: '500',
@@ -331,6 +410,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     marginTop: 16,
+    opacity: 1,
   },
   conferirButtonText: {
     color: 'white',

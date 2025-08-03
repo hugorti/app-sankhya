@@ -5,6 +5,9 @@ export default function EstoqueScreen() {
   return (
     <View style={styles.container}>
       <Text style={styles.title}>Estoque</Text>
+      <Text style={styles.subtitle}>Em desenvolvimento..</Text>
+      <Text>By: Hugo Rodrigues</Text>
+      <Text>TI LABOTRAT</Text>
     </View>
   );
 }
@@ -19,6 +22,10 @@ const styles = StyleSheet.create({
   title: {
     fontSize: 32,
     fontWeight: 'bold',
-    color: '#FF9800', // Cor correspondente ao card
+    color: '#4CAF50', // Cor correspondente ao card
+  },
+  subtitle: {
+    fontSize: 20,
+    fontWeight: 'bold',
   },
 });
