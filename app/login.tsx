@@ -1,23 +1,25 @@
+// app/login.tsx
 import { useState, useEffect } from 'react';
 import { View, TextInput, StyleSheet, Text, ActivityIndicator, Alert, TouchableOpacity } from 'react-native';
 import { useRouter } from 'expo-router';
 import { useSession } from '../hooks/useSession';
 import { MaterialIcons } from '@expo/vector-icons';
+import ServerConfigModal from '../components/ServerConfigModal';
+import { setBaseURL } from '../services/api';
 
 export default function LoginScreen() {
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [secureTextEntry, setSecureTextEntry] = useState(true);
   const [isFormValid, setIsFormValid] = useState(false);
+  const [configModalVisible, setConfigModalVisible] = useState(false);
   const router = useRouter();
   const { login, loading, error } = useSession();
 
-  // Validação do formulário
   useEffect(() => {
     setIsFormValid(username.trim().length > 0 && password.trim().length > 0);
   }, [username, password]);
 
-  // Formata o username para maiúsculas
   const handleUsernameChange = (text: string) => {
     setUsername(text.toUpperCase());
   };
@@ -33,6 +35,11 @@ export default function LoginScreen() {
     } catch (error: any) {
       handleLoginError(error);
     }
+  };
+
+  const handleSaveServerConfig = (ipPort: string) => {
+    setBaseURL(ipPort);
+    Alert.alert('Sucesso', 'Configuração do servidor atualizada com sucesso!');
   };
 
   const showValidationError = () => {
@@ -56,6 +63,7 @@ export default function LoginScreen() {
     if (error.message.includes('Timeout')) {
       errorMessage += '• Verifique sua conexão com a internet\n';
       errorMessage += '• O servidor pode estar indisponível\n';
+      errorMessage += '• Verifique se o endereço do servidor está correto\n';
     } else if (error.message.includes('Credenciais')) {
       errorMessage += '• Usuário ou senha incorretos\n';
     } else {
@@ -73,9 +81,14 @@ export default function LoginScreen() {
 
   return (
     <View style={styles.container}>
+      <ServerConfigModal
+        visible={configModalVisible}
+        onClose={() => setConfigModalVisible(false)}
+        onSave={handleSaveServerConfig}
+      />
+      
       <View style={styles.logoContainer}>
         <Text style={styles.title}>WMS LABOTRAT</Text>
-        <Text style={styles.subtitle}>Acesso ao Sistema</Text>
       </View>
       
       {/* Campo de Usuário */}
@@ -141,6 +154,15 @@ export default function LoginScreen() {
         )}
       </TouchableOpacity>
 
+      {/* Botão de Configuração */}
+      <TouchableOpacity 
+        style={styles.configButton}
+        onPress={() => setConfigModalVisible(true)}
+      >
+        <MaterialIcons name="settings" size={20} color="#9c27b0" />
+        <Text style={styles.configButtonText}>CONFIGURAR SERVIDOR</Text>
+      </TouchableOpacity>
+
       <View style={styles.footer}>
         <Text style={styles.footerText}>Versão 1.0.0</Text>
       </View>
@@ -183,7 +205,6 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '600',
     color: '#6a1b9a',
-    marginBottom: 8,
     textTransform: 'uppercase',
     letterSpacing: 0.5,
   },
@@ -236,8 +257,21 @@ const styles = StyleSheet.create({
     fontWeight: 'bold',
     letterSpacing: 0.5,
   },
+  configButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: 5,
+    padding: 10,
+  },
+  configButtonText: {
+    color: '#9c27b0',
+    fontSize: 14,
+    marginLeft: 8,
+    fontWeight: '500',
+  },
   footer: {
-    marginTop: 20,
+    marginTop: 10,
     alignItems: 'center',
   },
   footerText: {

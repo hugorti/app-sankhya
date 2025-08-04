@@ -4,6 +4,11 @@ import { Buffer } from 'buffer';
 import { XMLParser } from 'fast-xml-parser';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
+const SERVER_URL_KEY = 'saved_server_url';
+const DEFAULT_IP = '';
+const DEFAULT_PORT = '8180';
+const DEFAULT_URL = `${DEFAULT_IP}:${DEFAULT_PORT}`;
+
 const parser = new XMLParser({
   attributeNamePrefix: '@_',
   ignoreAttributes: false,
@@ -17,10 +22,78 @@ interface LoginResponse {
   callID: string;
 }
 
-// Configuração base do axios
+let currentBaseURL = `http://${DEFAULT_URL}/mge/`;
+
+// Helper function to validate and format server URL
+const formatServerUrl = (ipPort: string): string => {
+  // Remove protocol if present
+  ipPort = ipPort.replace(/^https?:\/\//, '');
+  
+  // Split IP and port
+  let [ip, port] = ipPort.split(':');
+  
+  // Clean IP and port
+  ip = ip.replace(/\/+$/, '').trim();
+  port = (port || DEFAULT_PORT).replace(/\/+$/, '').trim();
+  
+  // Validate IP format (simple validation)
+  if (!/^(\d{1,3}\.){3}\d{1,3}$/.test(ip) && !/^[a-zA-Z0-9\-\.]+$/.test(ip)) {
+    throw new Error('Formato de IP inválido');
+  }
+  
+  // Validate port
+  if (!/^\d+$/.test(port)) {
+    throw new Error('Porta inválida');
+  }
+
+  return `http://${ip}:${port}/mge/`;
+};
+
+// Set base URL with validation
+export const setBaseURL = async (ipPort: string): Promise<boolean> => {
+  try {
+    const formattedUrl = formatServerUrl(ipPort);
+    
+    // Test connection
+    await axios.get(formattedUrl, { timeout: 5000 });
+    
+    // Update current URL
+    currentBaseURL = formattedUrl;
+    api.defaults.baseURL = currentBaseURL;
+    
+    // Save only the clean ip:port
+    const cleanIpPort = ipPort.replace(/^https?:\/\//, '').replace(/\/+$/, '');
+    await AsyncStorage.setItem(SERVER_URL_KEY, cleanIpPort);
+    
+    return true;
+  } catch (error) {
+    console.error('URL configuration error:', error);
+    throw new Error(
+      axios.isAxiosError(error) 
+        ? 'Servidor não respondendo. Verifique o endereço e conexão.'
+        : error instanceof Error 
+          ? error.message 
+          : 'Erro desconhecido ao configurar URL'
+    );
+  }
+};
+
+// Initialize API with saved URL or default
+export const initializeAPI = async (): Promise<void> => {
+  try {
+    const saved = await AsyncStorage.getItem(SERVER_URL_KEY);
+    if (saved) {
+      await setBaseURL(saved);
+    }
+  } catch (error) {
+    console.error('API initialization error:', error);
+    // Fallback to default URL
+    api.defaults.baseURL = currentBaseURL;
+  }
+};
+
 const api: AxiosInstance = axios.create({
-  //baseURL: 'http://45.186.217.65:8180/mge/',
-  baseURL: 'http://179.127.28.188:55180/mge/',
+  baseURL: currentBaseURL,
   timeout: 15000,
   headers: {
     'Content-Type': 'application/xml; charset=ISO-8859-1',
@@ -28,38 +101,44 @@ const api: AxiosInstance = axios.create({
   }
 });
 
-// Interceptador para incluir o JSESSIONID automaticamente
+// Request interceptor for session handling
 api.interceptors.request.use(async (config) => {
-  const session = await AsyncStorage.getItem('sankhya_session');
-  if (session) {
-    const { jsessionid } = JSON.parse(session);
-    if (jsessionid) {
-      config.headers.Cookie = `JSESSIONID=${jsessionid}`;
+  try {
+    const session = await AsyncStorage.getItem('sankhya_session');
+    if (session) {
+      const { jsessionid } = JSON.parse(session);
+      if (jsessionid) {
+        config.headers.Cookie = `JSESSIONID=${jsessionid}`;
+      }
     }
+    return config;
+  } catch (error) {
+    console.error('Request interceptor error:', error);
+    return config;
   }
-  return config;
 });
 
-// Interceptador para tratar erros de autenticação
+// Response interceptor for error handling
 api.interceptors.response.use(
   (response) => response,
-  (error: AxiosError) => {
+  async (error: AxiosError) => {
     if (error.response?.status === 401) {
-      // Sessão expirada - limpa o storage e redireciona
-      AsyncStorage.removeItem('sankhya_session');
-      // Você pode adicionar um evento global ou usar React Navigation para redirecionar
+      await AsyncStorage.removeItem('sankhya_session');
     }
+    
+    if (error.code === 'ECONNABORTED') {
+      throw new Error('Timeout: O servidor não respondeu');
+    }
+    
+    if (!error.response) {
+      throw new Error('Erro de conexão. Verifique sua internet.');
+    }
+    
     return Promise.reject(error);
   }
 );
 
-/**
- * Realiza o login no sistema Sankhya
- * @param username Nome de usuário
- * @param password Senha
- * @returns Objeto com dados da sessão
- */
-// services/api.ts (apenas a parte relevante modificada)
+// Login function with improved error handling
 export const login = async (username: string, password: string): Promise<LoginResponse> => {
   const xmlRequest = `<?xml version="1.0" encoding="ISO-8859-1"?>
 <serviceRequest serviceName="MobileLoginSP.login">
@@ -73,13 +152,8 @@ export const login = async (username: string, password: string): Promise<LoginRe
     const response = await api.post(
       'services.sbr?serviceName=MobileLoginSP.login',
       xmlRequest,
-      {
-        responseType: 'text',
-        transformResponse: [data => data]
-      }
+      { responseType: 'text', transformResponse: [data => data] }
     );
-
-    // Removido o console.log da resposta bruta
 
     if (typeof response.data !== 'string' || !response.data.includes('serviceResponse')) {
       throw new Error('Resposta inválida do servidor');
@@ -88,28 +162,29 @@ export const login = async (username: string, password: string): Promise<LoginRe
     const result = parser.parse(response.data);
 
     if (!result.serviceResponse || result.serviceResponse['@_status'] !== "1") {
-      throw new Error('Credenciais inválidas'); // Mensagem genérica
+      const errorMsg = result.serviceResponse?.statusMessage 
+        ? Buffer.from(result.serviceResponse.statusMessage, 'base64').toString('utf-8')
+        : 'Credenciais inválidas';
+      throw new Error(errorMsg);
     }
 
-    if (!result.serviceResponse.responseBody) {
-      throw new Error('Estrutura de resposta incompleta');
-    }
-
-    return {
+    const sessionData = {
       jsessionid: result.serviceResponse.responseBody.jsessionid || '',
       idusu: (result.serviceResponse.responseBody.idusu || '').trim(),
       callID: result.serviceResponse.responseBody.callID || ''
     };
 
+    await AsyncStorage.setItem('sankhya_session', JSON.stringify(sessionData));
+    
+    return sessionData;
   } catch (error) {
-    // Simplificando o tratamento de erro
-    if (axios.isAxiosError(error)) {
-      if (error.code === 'ECONNABORTED') {
-        throw new Error('Servidor não respondeu. Verifique sua conexão.');
-      }
-      throw new Error('Erro ao conectar ao servidor');
-    }
-    throw new Error('Credenciais inválidas'); // Mensagem padrão para outros erros
+    throw new Error(
+      axios.isAxiosError(error)
+        ? 'Erro de conexão com o servidor'
+        : error instanceof Error
+          ? error.message
+          : 'Erro desconhecido durante login'
+    );
   }
 };
 
@@ -117,33 +192,37 @@ export const logout = async (): Promise<void> => {
   try {
     await api.post('services.sbr?serviceName=MobileLoginSP.logout');
   } catch (error) {
-    console.warn('Erro durante logout remoto:', error);
+    console.warn('Logout error:', error);
+  } finally {
+    await AsyncStorage.removeItem('sankhya_session');
   }
 };
 
-// Lista /api.ts
 export const queryJson = async (serviceName: string, requestBody: object): Promise<any> => {
-  const response = await api.post(
-    `service.sbr?serviceName=${encodeURIComponent(serviceName)}&outputType=json`,
-    {
-      requestBody: requestBody // Envolva o corpo da requisição em requestBody
-    },
-    {
-      headers: {
-        'Content-Type': 'application/json',
-      }
+  try {
+    const response = await api.post(
+      `service.sbr?serviceName=${encodeURIComponent(serviceName)}&outputType=json`,
+      { requestBody },
+      { headers: { 'Content-Type': 'application/json' } }
+    );
+
+    if (response.data.status !== "1") {
+      throw new Error(response.data.statusMessage || 'Erro na requisição');
     }
-  );
 
-  if (response.data.status !== "1") {
-    const errorMsg = response.data.statusMessage || 'Erro na requisição';
-    throw new Error(typeof errorMsg === 'string' ? errorMsg : 'Erro desconhecido');
+    return response.data.responseBody;
+  } catch (error) {
+    console.error('JSON query error:', error);
+    throw new Error(
+      axios.isAxiosError(error)
+        ? 'Erro de conexão com o servidor'
+        : error instanceof Error
+          ? error.message
+          : 'Erro desconhecido na consulta'
+    );
   }
-
-  return response.data.responseBody;
 };
 
-// Adicione esta nova função no seu arquivo de serviços (api.ts)
 export const salvarConferenciaAPI = async (data: {
   NUNOTA: number;
   ORDEMCARGA: number;
@@ -151,7 +230,7 @@ export const salvarConferenciaAPI = async (data: {
   DESCRICAO: string;
   VOLUMES: string | number;
   COMPLETA: boolean;
-}) => {
+}): Promise<any> => {
   const situacao = data.COMPLETA ? "Conferência completa" : "Conferência com divergência";
   
   const requestBody = {
@@ -167,32 +246,42 @@ export const salvarConferenciaAPI = async (data: {
             DESCRICAO: { "$": data.DESCRICAO },
             ORDEMCARGA: { "$": data.ORDEMCARGA },
             VOLUMES: { "$": data.VOLUMES },
-            SITUACAO: { "$": situacao } // Adicione esta linha
+            SITUACAO: { "$": situacao }
           }
         },
         entity: {
           fieldset: {
-            list: "CODIGO,NUNOTA,CONFERENTE,VOLUMES,SITUACAO" // Atualize esta linha
+            list: "CODIGO,NUNOTA,CONFERENTE,VOLUMES,SITUACAO"
           }
         }
       }
     }
   };
 
-  const response = await api.post(
-    'service.sbr?serviceName=CRUDServiceProvider.saveRecord&outputType=json',
-    requestBody,
-    {
-      headers: {
-        'Content-Type': 'application/json',
-      }
-    }
-  );
+  try {
+    const response = await api.post(
+      'service.sbr?serviceName=CRUDServiceProvider.saveRecord&outputType=json',
+      requestBody,
+      { headers: { 'Content-Type': 'application/json' } }
+    );
 
-  return response.data;
+    if (response.data.status !== "1") {
+      throw new Error(response.data.statusMessage || 'Erro ao salvar');
+    }
+
+    return response.data.responseBody;
+  } catch (error) {
+    console.error('Save conference error:', error);
+    throw new Error(
+      axios.isAxiosError(error)
+        ? 'Erro de conexão com o servidor'
+        : error instanceof Error
+          ? error.message
+          : 'Erro desconhecido ao salvar'
+    );
+  }
 };
 
-// Adicione esta função no seu services/api.ts
 export const deletarConferenciaAPI = async (nunota: number): Promise<any> => {
   const xmlRequest = `<?xml version="1.0" encoding="ISO-8859-1"?>
 <serviceRequest serviceName="CRUDServiceProvider.deleteRecord">
@@ -210,29 +299,28 @@ export const deletarConferenciaAPI = async (nunota: number): Promise<any> => {
     const response = await api.post(
       'services.sbr?serviceName=CRUDServiceProvider.removeRecord',
       xmlRequest,
-      {
-        responseType: 'text',
-        transformResponse: [data => data]
-      }
+      { responseType: 'text', transformResponse: [data => data] }
     );
 
     const result = parser.parse(response.data);
     
     if (!result.serviceResponse || result.serviceResponse['@_status'] !== "1") {
-      throw new Error('Erro ao deletar conferência');
+      throw new Error(result.serviceResponse?.statusMessage || 'Erro ao deletar');
     }
 
     return result.serviceResponse.responseBody;
   } catch (error) {
-    console.error('Erro ao deletar conferência:', error);
-    throw new Error('Erro ao deletar conferência');
+    console.error('Delete conference error:', error);
+    throw new Error(
+      axios.isAxiosError(error)
+        ? 'Erro de conexão com o servidor'
+        : error instanceof Error
+          ? error.message
+          : 'Erro desconhecido ao deletar'
+    );
   }
 };
-/**
- * Método genérico para consultas ao Sankhya
- * @param serviceName Nome do serviço
- * @param requestBody Corpo da requisição em XML
- */
+
 export const query = async (serviceName: string, requestBody: string): Promise<any> => {
   const xmlRequest = `<?xml version="1.0" encoding="ISO-8859-1"?>
 <serviceRequest serviceName="${escapeXml(serviceName)}">
@@ -241,30 +329,36 @@ export const query = async (serviceName: string, requestBody: string): Promise<a
   </requestBody>
 </serviceRequest>`;
 
-  const response = await api.post(
-    `services.sbr?serviceName=${encodeURIComponent(serviceName)}`,
-    xmlRequest,
-    {
-      responseType: 'text',
-      transformResponse: [data => data]
+  try {
+    const response = await api.post(
+      `services.sbr?serviceName=${encodeURIComponent(serviceName)}`,
+      xmlRequest,
+      { responseType: 'text', transformResponse: [data => data] }
+    );
+
+    const result = parser.parse(response.data);
+    
+    if (!result.serviceResponse || result.serviceResponse['@_status'] !== "1") {
+      const errorMsg = result.serviceResponse?.statusMessage 
+        ? Buffer.from(result.serviceResponse.statusMessage, 'base64').toString('utf-8')
+        : 'Erro na requisição';
+      throw new Error(errorMsg);
     }
-  );
 
-  const result = parser.parse(response.data);
-  
-  if (!result.serviceResponse || result.serviceResponse['@_status'] !== "1") {
-    const errorMsg = result.serviceResponse?.statusMessage 
-      ? Buffer.from(result.serviceResponse.statusMessage, 'base64').toString('utf-8')
-      : 'Erro na requisição';
-    throw new Error(errorMsg);
+    return result.serviceResponse.responseBody;
+  } catch (error) {
+    console.error('Query error:', error);
+    throw new Error(
+      axios.isAxiosError(error)
+        ? 'Erro de conexão com o servidor'
+        : error instanceof Error
+          ? error.message
+          : 'Erro desconhecido na consulta'
+    );
   }
-
-  return result.serviceResponse.responseBody;
 };
 
-/**
- * Escapa caracteres especiais para XML
- */
+// XML escape helper
 function escapeXml(unsafe: string): string {
   return unsafe.replace(/[<>&'"]/g, (c) => {
     switch (c) {
@@ -277,5 +371,10 @@ function escapeXml(unsafe: string): string {
     }
   });
 }
+
+// Initialize API on load
+initializeAPI().catch(error => {
+  console.error('Failed to initialize API:', error);
+});
 
 export default api;

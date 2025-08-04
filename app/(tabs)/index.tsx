@@ -90,7 +90,7 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     alignItems: 'center',
     padding: 20,
-    backgroundColor: '#6200EE',
+    backgroundColor: '#9c27b0',
     paddingTop: 50,
   },
   headerTitle: {
