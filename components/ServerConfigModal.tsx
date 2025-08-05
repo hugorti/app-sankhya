@@ -123,9 +123,8 @@ export default function ServerConfigModal({ visible, onClose, onSave }: {
           </View>
 
           <View style={styles.exampleContainer}>
-            <Text style={styles.exampleText}>Exemplos válidos:</Text>
+            <Text style={styles.exampleText}>Exemplos:</Text>
             <Text style={styles.exampleItem}>• 45.186.217.65:8180</Text>
-            <Text style={styles.exampleItem}>• 179.127.28.188:55180</Text>
             <Text style={styles.exampleItem}>• meuservidor.com.br:8080</Text>
           </View>
 

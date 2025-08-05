@@ -7,15 +7,10 @@
     "icon": "./assets/images/logo.png",
     "scheme": "sankhyaapp",
     "userInterfaceStyle": "automatic",
-    "newArchEnabled": true,
     "splash": {
       "image": "./assets/images/logo.png",
       "resizeMode": "contain",
       "backgroundColor": "#ffffff"
-    },
-    "ios": {
-      "supportsTablet": true,
-      "icon": "./assets/images/logo.png"
     },
     "android": {
       "adaptiveIcon": {
@@ -24,13 +19,23 @@
         "monochromeImage": "./assets/images/logo.png"
       },
       "package": "com.yourcompany.sankhyaapp",
-      "permissions": [],
-      "versionCode": 1,
-      "edgeToEdgeEnabled": true
+      "permissions": [
+        "android.permission.INTERNET",
+        "android.permission.ACCESS_NETWORK_STATE"
+      ],
+      "usesCleartextTraffic": true,
+      "networkSecurityConfig": "./network_security_config.xml",
+      "versionCode": 1
+    },
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.yourcompany.sankhyaapp",
+      "config": {
+        "usesNonExemptEncryption": false
+      }
     },
     "web": {
       "bundler": "metro",
-      "output": "static",
       "favicon": "./assets/images/logo.png"
     },
     "plugins": [
@@ -39,9 +44,20 @@
         "expo-splash-screen",
         {
           "image": "./assets/images/logo.png",
-          "imageWidth": 200,
           "resizeMode": "contain",
           "backgroundColor": "#ffffff"
+        }
+      ],
+      [
+        "expo-build-properties",
+        {
+          "android": {
+            "usesCleartextTraffic": true,
+            "networkSecurityConfig": "./network_security_config.xml"
+          },
+          "ios": {
+            "usesNonExemptEncryption": false
+          }
         }
       ]
     ],
@@ -52,7 +68,9 @@
       "**/*"
     ],
     "extra": {
-      "router": {},
+      "router": {
+        "origin": false
+      },
       "eas": {
         "projectId": "368ca46b-baf4-403b-91a9-611813c33b22"
       }

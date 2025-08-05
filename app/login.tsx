@@ -89,11 +89,12 @@ export default function LoginScreen() {
       
       <View style={styles.logoContainer}>
         <Text style={styles.title}>WMS LABOTRAT</Text>
+        <Text style={styles.subtitle}>Acesso ao Sistema</Text>
       </View>
       
       {/* Campo de Usuário */}
       <View style={styles.inputContainer}>
-        <Text style={styles.label}>USUÁRIO</Text>
+        {/* <Text style={styles.label}>USUÁRIO</Text> */}
         <View style={styles.inputWrapper}>
           <MaterialIcons name="person" size={24} color="#9c27b0" style={styles.icon} />
           <TextInput
@@ -112,7 +113,7 @@ export default function LoginScreen() {
       
       {/* Campo de Senha */}
       <View style={styles.inputContainer}>
-        <Text style={styles.label}>SENHA</Text>
+        {/* <Text style={styles.label}>SENHA</Text> */}
         <View style={styles.inputWrapper}>
           <MaterialIcons name="lock" size={24} color="#9c27b0" style={styles.icon} />
           <TextInput
@@ -205,6 +206,7 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '600',
     color: '#6a1b9a',
+    marginBottom: 8,
     textTransform: 'uppercase',
     letterSpacing: 0.5,
   },
@@ -212,6 +214,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     borderWidth: 1,
+    marginBottom: 10,
     borderColor: '#ce93d8',
     borderRadius: 12,
     backgroundColor: '#fafafa',
@@ -237,7 +240,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
     backgroundColor: '#9c27b0',
-    marginTop: 30,
+    marginTop: 20,
     shadowColor: '#6a1b9a',
     shadowOffset: { width: 0, height: 4 },
     shadowOpacity: 0.3,
