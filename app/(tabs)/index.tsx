@@ -64,7 +64,7 @@ export default function HomeScreen() {
             onPress={() => navigateTo('estoque')}
           >
             <Ionicons name="archive-outline" size={48} color="white" />
-            <Text style={styles.cardText}>Estoque</Text>
+            <Text style={styles.cardText}>Almoxarife</Text>
           </TouchableOpacity>
 
           <TouchableOpacity 

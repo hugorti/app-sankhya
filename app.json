@@ -9,13 +9,11 @@
     "userInterfaceStyle": "automatic",
     "splash": {
       "image": "./assets/images/logo.png",
-      "resizeMode": "contain",
-      "backgroundColor": "#ffffff"
+      "resizeMode": "contain"
     },
     "android": {
       "adaptiveIcon": {
         "foregroundImage": "./assets/images/logo.png",
-        "backgroundColor": "#ffffff",
         "monochromeImage": "./assets/images/logo.png"
       },
       "package": "com.yourcompany.sankhyaapp",
@@ -44,8 +42,7 @@
         "expo-splash-screen",
         {
           "image": "./assets/images/logo.png",
-          "resizeMode": "contain",
-          "backgroundColor": "#ffffff"
+          "resizeMode": "contain"
         }
       ],
       [

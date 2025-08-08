@@ -1,5 +1,4 @@
-// app/expedução.tsx
-import { View, Text, StyleSheet, ActivityIndicator, TextInput, TouchableOpacity, ScrollView } from 'react-native';
+import { View, Text, StyleSheet, ActivityIndicator, TextInput, TouchableOpacity, ScrollView, SafeAreaView } from 'react-native';
 import { useState } from 'react';
 import { useRouter } from 'expo-router';
 import { queryJson } from '@/services/api';
@@ -13,9 +12,9 @@ interface DadosSeparacao {
   NOMEPARC: string;
   TOTAL_VOLUMES: number;
   NUSEPARACAO: number;
-  VOLUMES: string | number; // Novo campo
-  STATUS: string; // Novo campo
-  CONFERENTE: string; 
+  VOLUMES: string | number;
+  STATUS: string;
+  CONFERENTE: string;
 }
 
 export default function ExpedicaoScreen() {
@@ -27,6 +26,8 @@ export default function ExpedicaoScreen() {
   const [ordemCarga, setOrdemCarga] = useState('');
   const [nunota, setNunota] = useState('');
 
+  const [mostrarDados, setMostrarDados] = useState(true);
+
   const buscarDados = async () => {
     if (!session?.jsessionid || !ordemCarga.trim() || !nunota.trim()) return;
 
@@ -34,48 +35,49 @@ export default function ExpedicaoScreen() {
       setLoading(true);
       setError(null);
       setDados(null);
+      setMostrarDados(true)
       
-      // Substitua a consulta SQL por esta versão corrigida
-const sqlQuery = `
-  SELECT
-    '1/' + CAST(MAX(REV.SEQETIQUETA) OVER () AS VARCHAR) AS SEQETIQUETA,
-    SEP.ORDEMCARGA,
-    COI.NUCONFERENCIA,
-    PAR.NOMEPARC,
-    COUNT(*) OVER () AS TOTAL_VOLUMES,
-    SEP.NUSEPARACAO,
-    ISNULL(EXP.VOLUMES, 0) AS VOLUMES,
-    ISNULL(EXP.SITUACAO, 'PENDENTE') AS STATUS,
-    ISNULL(EXP.CONFERENTE, 'PENDENTE') AS CONFERENTE
-  FROM TGWREV REV
-  LEFT JOIN TGWSEP SEP ON REV.NUSEPARACAO = SEP.NUSEPARACAO
-  OUTER APPLY (
-    SELECT TOP 1 NUCONFERENCIA
-    FROM TGWCOI
-    WHERE SEP.NUCONFERENCIA = TGWCOI.NUCONFERENCIA
-    ORDER BY NUCONFERENCIA DESC
-  ) COI
-  LEFT JOIN TGFCAB CAB ON SEP.NUNOTA = CAB.NUNOTA
-  LEFT JOIN TGFPAR PAR ON CAB.CODPARC = PAR.CODPARC
-  OUTER APPLY (
-    SELECT TOP 1 CODIGO, VOLUMES, SITUACAO, CONFERENTE
-    FROM AD_EXPEDICAODASH
-    WHERE SEP.ORDEMCARGA = AD_EXPEDICAODASH.ORDEMCARGA 
-    AND CAB.NUNOTA = AD_EXPEDICAODASH.NUNOTA
-    ORDER BY CODIGO DESC  -- Ordenando pelo código para pegar o registro mais recente
-  ) EXP
-  WHERE SEP.ORDEMCARGA = ${ordemCarga}
-  AND CAB.NUNOTA = ${nunota}
-  GROUP BY
-    REV.SEQETIQUETA,
-    SEP.ORDEMCARGA,
-    COI.NUCONFERENCIA,
-    PAR.NOMEPARC,
-    SEP.NUSEPARACAO,
-    EXP.VOLUMES,
-    EXP.SITUACAO,
-    EXP.CONFERENTE
-`;
+      const sqlQuery = `
+        SELECT
+            CAST(ROW_NUMBER() OVER (ORDER BY REV.SEQETIQUETA) AS VARCHAR) + '/' + 
+            CAST(COUNT(*) OVER () AS VARCHAR) AS SEQETIQUETA,
+            SEP.ORDEMCARGA,
+            COI.NUCONFERENCIA,
+            PAR.NOMEPARC,
+            COUNT(*) OVER () AS TOTAL_VOLUMES,
+            SEP.NUSEPARACAO,
+            ISNULL(EXP.VOLUMES, 0) AS VOLUMES,
+            ISNULL(EXP.SITUACAO, 'PENDENTE') AS STATUS,
+            ISNULL(EXP.CONFERENTE, 'PENDENTE') AS CONFERENTE
+        FROM TGWREV REV
+        LEFT JOIN TGWSEP SEP ON REV.NUSEPARACAO = SEP.NUSEPARACAO
+        OUTER APPLY (
+            SELECT TOP 1 NUCONFERENCIA
+            FROM TGWCOI
+            WHERE SEP.NUCONFERENCIA = TGWCOI.NUCONFERENCIA
+            ORDER BY NUCONFERENCIA DESC
+        ) COI
+        LEFT JOIN TGFCAB CAB ON SEP.NUNOTA = CAB.NUNOTA
+        LEFT JOIN TGFPAR PAR ON CAB.CODPARC = PAR.CODPARC
+        OUTER APPLY (
+            SELECT TOP 1 CODIGO, VOLUMES, SITUACAO, CONFERENTE
+            FROM AD_EXPEDICAODASH
+            WHERE SEP.ORDEMCARGA = AD_EXPEDICAODASH.ORDEMCARGA 
+            AND CAB.NUNOTA = AD_EXPEDICAODASH.NUNOTA
+            ORDER BY CODIGO DESC
+        ) EXP
+        WHERE SEP.ORDEMCARGA = ${ordemCarga}
+              AND CAB.NUNOTA = ${nunota}
+        GROUP BY
+            REV.SEQETIQUETA,
+            SEP.ORDEMCARGA,
+            COI.NUCONFERENCIA,
+            PAR.NOMEPARC,
+            SEP.NUSEPARACAO,
+            EXP.VOLUMES,
+            EXP.SITUACAO,
+            EXP.CONFERENTE
+      `;
 
       const result = await queryJson('DbExplorerSP.executeQuery', {
         sql: sqlQuery
@@ -90,8 +92,8 @@ const sqlQuery = `
           NOMEPARC: primeiroRegistro[3],
           TOTAL_VOLUMES: primeiroRegistro[4],
           NUSEPARACAO: primeiroRegistro[5],
-          VOLUMES: primeiroRegistro[6] || 0, // Adicionando campo VOLUMES
-          STATUS: primeiroRegistro[7] || 'PENDENTE', // Adicionando campo STATUS
+          VOLUMES: primeiroRegistro[6] || 0,
+          STATUS: primeiroRegistro[7] || 'PENDENTE',
           CONFERENTE: primeiroRegistro[8] || 'PENDENTE'
         });
       } else {
@@ -106,7 +108,8 @@ const sqlQuery = `
   };
 
   const abrirConferencia = () => {
-    if (dados) {
+     if (dados) {
+      setMostrarDados(false); // Oculta os dados ao iniciar a conferência
       router.push({
         pathname: '/conferencia',
         params: {
@@ -122,9 +125,21 @@ const sqlQuery = `
     }
   };
 
+  // Função para extrair o número de volumes expedidos
+  const getVolumesExpedidos = (volumesString: string | number) => {
+    const str = volumesString.toString();
+    const match = str.match(/(\d+)/);
+    return match ? parseInt(match[1], 10) : 0;
+  };
+
+  // Verifica se todos os volumes foram expedidos
+  const todosExpedidos = dados ? 
+    getVolumesExpedidos(dados.VOLUMES) >= dados.TOTAL_VOLUMES : 
+    false;
+
   return (
-    <View style={styles.container}>
-      {/* Cabeçalho (mantido fora do ScrollView para ficar fixo) */}
+    <SafeAreaView style={styles.container}>
+      {/* Cabeçalho */}
       <View style={styles.header}>
         <TouchableOpacity onPress={() => router.back()}>
           <Ionicons name="arrow-back" size={24} color="white" />
@@ -133,7 +148,7 @@ const sqlQuery = `
         <View style={{ width: 24 }} />
       </View>
 
-      {/* Conteúdo principal dentro de ScrollView */}
+      {/* Conteúdo principal */}
       <ScrollView 
         contentContainerStyle={styles.scrollContent}
         keyboardShouldPersistTaps="handled"
@@ -153,7 +168,7 @@ const sqlQuery = `
           </View>
           
           <View style={styles.inputGroup}>
-            <Text style={styles.label}>Nota Fiscal</Text>
+            <Text style={styles.label}>Nº Pedido</Text>
             <TextInput
               style={styles.input}
               placeholder="Digite o número da nota"
@@ -189,100 +204,97 @@ const sqlQuery = `
           </View>
         )}
 
-        {dados && (
-  <View style={styles.card}>
-    <Text style={styles.cardTitle}>Dados da Expedição</Text>
-    
-    <View style={styles.cardRow}>
-      <Ionicons name="barcode-outline" size={20} color="#4CAF50" />
-      <Text style={styles.cardLabel}>Volumes:</Text>
-      <Text style={styles.cardValue}>{dados.TOTAL_VOLUMES}</Text>
-    </View>
-    
-    <View style={styles.cardRow}>
-      <Ionicons name="list-outline" size={20} color="#4CAF50" />
-      <Text style={styles.cardLabel}>Ordem Carga:</Text>
-      <Text style={styles.cardValue}>{dados.ORDEMCARGA}</Text>
-    </View>
-    
-    <View style={styles.cardRow}>
-      <Ionicons name="checkmark-circle-outline" size={20} color="#4CAF50" />
-      <Text style={styles.cardLabel}>Conferência:</Text>
-      <Text style={styles.cardValue}>{dados.NUCONFERENCIA}</Text>
-    </View>
-    
-    <View style={styles.cardRow}>
-      <Ionicons name="person-outline" size={20} color="#4CAF50" />
-      <Text style={styles.cardLabel}>Cliente:</Text>
-      <Text style={styles.cardValue}>{dados.NOMEPARC}</Text>
-    </View>
-    
-    <View style={styles.cardRow}>
-      <Ionicons name="cube-outline" size={20} color="#4CAF50" />
-      <Text style={styles.cardLabel}>Volumes Expedidos:</Text>
-      <Text style={styles.cardValue}>{dados.VOLUMES}</Text>
-    </View>
+        {dados && mostrarDados && (
+          <View style={styles.card}>
+            <Text style={styles.cardTitle}>Dados da Expedição</Text>
+            
+            <View style={styles.cardRow}>
+              <Ionicons name="barcode-outline" size={20} color="#4CAF50" />
+              <Text style={styles.cardLabel}>Volumes:</Text>
+              <Text style={styles.cardValue}>{dados.TOTAL_VOLUMES}</Text>
+            </View>
+            
+            <View style={styles.cardRow}>
+              <Ionicons name="list-outline" size={20} color="#4CAF50" />
+              <Text style={styles.cardLabel}>Ordem Carga:</Text>
+              <Text style={styles.cardValue}>{dados.ORDEMCARGA}</Text>
+            </View>
+            
+            <View style={styles.cardRow}>
+              <Ionicons name="checkmark-circle-outline" size={20} color="#4CAF50" />
+              <Text style={styles.cardLabel}>Conferência:</Text>
+              <Text style={styles.cardValue}>{dados.NUCONFERENCIA}</Text>
+            </View>
+            
+            <View style={styles.cardRow}>
+              <Ionicons name="person-outline" size={20} color="#4CAF50" />
+              <Text style={styles.cardLabel}>Cliente:</Text>
+              <Text style={styles.cardValue}>{dados.NOMEPARC}</Text>
+            </View>
+            
+            <View style={styles.cardRow}>
+              <Ionicons name="cube-outline" size={20} color="#4CAF50" />
+              <Text style={styles.cardLabel}>Volumes Expedidos:</Text>
+              <Text style={styles.cardValue}>{dados.VOLUMES}</Text>
+            </View>
 
-       <View style={styles.cardRow}>
-      <Ionicons name="person-circle-outline" size={20} color="#4CAF50" />
-      <Text style={styles.cardLabel}>Conferente:</Text>
-      <Text style={[styles.cardValue, 
-        dados.CONFERENTE === 'PENDENTE' ? { color: 'orange' } : { color: '#333' }]}>
-        {dados.CONFERENTE}
-      </Text>
-    </View>
+            <View style={styles.cardRow}>
+              <Ionicons name="person-circle-outline" size={20} color="#4CAF50" />
+              <Text style={styles.cardLabel}>Conferente:</Text>
+              <Text style={[styles.cardValue, 
+                dados.CONFERENTE === 'PENDENTE' ? { color: 'orange' } : { color: '#333' }]}>
+                {dados.CONFERENTE}
+              </Text>
+            </View>
 
-    <View style={styles.cardRow}>
-      <Ionicons name="alert-circle-outline" size={20} color="#4CAF50" />
-      <Text style={styles.cardLabel}>Status:</Text>
-      <Text style={[styles.cardValue, 
-        dados.STATUS === 'FINALIZADO' ? { color: 'green' } : 
-        dados.STATUS === 'PENDENTE' ? { color: 'orange' } : 
-        { color: 'red' }]}>
-        {dados.STATUS}
-      </Text>
-    </View>
+            <View style={styles.cardRow}>
+              <Ionicons name="alert-circle-outline" size={20} color="#4CAF50" />
+              <Text style={styles.cardLabel}>Status:</Text>
+              <Text style={[styles.cardValue, 
+                dados.STATUS === 'Conferência completa' ? { color: '#2196F3' } : { color: '#D32F2F' }]}>
+                {dados.STATUS}
+              </Text>
+            </View>
 
-    {/* Botões condicionais */}
-    {dados.STATUS === 'PENDENTE' ? (
-      <TouchableOpacity 
-        style={[styles.actionButton, { backgroundColor: '#2196F3' }]}
-        onPress={abrirConferencia}
-      >
-        <Ionicons name="play-circle-outline" size={24} color="white" />
-        <Text style={styles.actionButtonText}>INICIAR CONFERÊNCIA</Text>
-      </TouchableOpacity>
-    ) : (
-      <TouchableOpacity 
-        style={[styles.actionButton, { backgroundColor: '#D32F2F' }]}
-        onPress={abrirConferencia}
-      >
-        <Ionicons name="refresh-circle-outline" size={24} color="white" />
-        <Text style={styles.actionButtonText}>RECONTAR</Text>
-      </TouchableOpacity>
-    )}
+            {/* Botões condicionais */}
+            {dados.STATUS === 'PENDENTE' ? (
+              <TouchableOpacity 
+                style={[styles.actionButton, { backgroundColor: '#2196F3' }]}
+                onPress={abrirConferencia}
+              >
+                <Ionicons name="play-circle-outline" size={24} color="white" />
+                <Text style={styles.actionButtonText}>INICIAR CONFERÊNCIA</Text>
+              </TouchableOpacity>
+            ) : !todosExpedidos ? (
+              <TouchableOpacity 
+                style={[styles.actionButton, { backgroundColor: '#D32F2F' }]}
+                onPress={abrirConferencia}
+              >
+                <Ionicons name="refresh-circle-outline" size={24} color="white" />
+                <Text style={styles.actionButtonText}>RECONTAR</Text>
+              </TouchableOpacity>
+            ) : null}
 
-    {/* Botão adicional para finalizados */}
-    {dados.STATUS === 'FINALIZADO' && (
-      <TouchableOpacity 
-        style={[styles.actionButton, { backgroundColor: '#4CAF50', marginTop: 8 }]}
-        onPress={() => {/* Lógica para visualizar conferência */}}
-      >
-        <Ionicons name="eye-outline" size={24} color="white" />
-        <Text style={styles.actionButtonText}>VISUALIZAR CONFERÊNCIA</Text>
-      </TouchableOpacity>
-    )}
-  </View>
-)}
+            {/* Botão para visualizar conferência finalizada */}
+            {todosExpedidos && dados.STATUS === 'FINALIZADO' && (
+              <TouchableOpacity 
+                style={[styles.actionButton, { backgroundColor: '#4CAF50', marginTop: 8 }]}
+                onPress={abrirConferencia}
+              >
+                <Ionicons name="eye-outline" size={24} color="white" />
+                <Text style={styles.actionButtonText}>VISUALIZAR CONFERÊNCIA</Text>
+              </TouchableOpacity>
+            )}
+          </View>
+        )}
       </ScrollView>
-    </View>
+    </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#f5f5f5',
   },
   scrollContent: {
     flexGrow: 1,

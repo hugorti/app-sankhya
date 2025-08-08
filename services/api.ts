@@ -3,11 +3,13 @@ import axios, { AxiosError, AxiosInstance } from 'axios';
 import { Buffer } from 'buffer';
 import { XMLParser } from 'fast-xml-parser';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { Alert, AppState, AppStateStatus } from 'react-native';
 
 const SERVER_URL_KEY = 'saved_server_url';
 const DEFAULT_IP = '';
 const DEFAULT_PORT = '8180';
 const DEFAULT_URL = `${DEFAULT_IP}:${DEFAULT_PORT}`;
+const INACTIVITY_TIMEOUT = 60000; // 5 minutos em milissegundos
 
 const parser = new XMLParser({
   attributeNamePrefix: '@_',
@@ -23,25 +25,74 @@ interface LoginResponse {
 }
 
 let currentBaseURL = `http://${DEFAULT_URL}/mge/`;
+let inactivityTimer: number | null = null;
+let appStateListener: (() => void) | null = null;
+let onInactiveCallback: (() => Promise<void>) | null = null;
+
+let appStateSubscription: { remove: () => void } | null = null;
+
+// Funções para gerenciar inatividade
+const resetInactivityTimer = () => {
+  if (inactivityTimer) {
+    clearTimeout(inactivityTimer);
+  }
+  
+  inactivityTimer = setTimeout(async () => {
+    try {
+      if (onInactiveCallback) {
+        await onInactiveCallback();
+      }
+    } catch (error) {
+      console.error('Erro durante logout automático:', error);
+    }
+  }, INACTIVITY_TIMEOUT) as unknown as number;
+};
+
+export const setupInactivityListener = (callback: () => Promise<void>) => {
+  onInactiveCallback = callback;
+  
+  // Limpar subscription existente
+  if (appStateSubscription) {
+    appStateSubscription.remove();
+    appStateSubscription = null;
+  }
+
+  // Configurar novo listener
+  appStateSubscription = AppState.addEventListener('change', (nextAppState: AppStateStatus) => {
+    if (nextAppState === 'active') {
+      resetInactivityTimer();
+    } else {
+      clearInactivityTimer();
+    }
+  });
+
+  resetInactivityTimer();
+};
+
+export const clearInactivityTimer = () => {
+  if (inactivityTimer) {
+    clearTimeout(inactivityTimer);
+    inactivityTimer = null;
+  }
+  
+  if (appStateSubscription) {
+    appStateSubscription.remove();
+    appStateSubscription = null;
+  }
+};
 
 // Helper function to validate and format server URL
 const formatServerUrl = (ipPort: string): string => {
-  // Remove protocol if present
   ipPort = ipPort.replace(/^https?:\/\//, '');
-  
-  // Split IP and port
   let [ip, port] = ipPort.split(':');
   
-  // Clean IP and port
   ip = ip.replace(/\/+$/, '').trim();
   port = (port || DEFAULT_PORT).replace(/\/+$/, '').trim();
   
-  // Validate IP format (simple validation)
   if (!/^(\d{1,3}\.){3}\d{1,3}$/.test(ip) && !/^[a-zA-Z0-9\-\.]+$/.test(ip)) {
     throw new Error('Formato de IP inválido');
   }
   
-  // Validate port
   if (!/^\d+$/.test(port)) {
     throw new Error('Porta inválida');
   }
@@ -53,21 +104,16 @@ const formatServerUrl = (ipPort: string): string => {
 export const setBaseURL = async (ipPort: string): Promise<boolean> => {
   try {
     const formattedUrl = formatServerUrl(ipPort);
-    
-    // Test connection
     await axios.get(formattedUrl, { timeout: 5000 });
     
-    // Update current URL
     currentBaseURL = formattedUrl;
     api.defaults.baseURL = currentBaseURL;
     
-    // Save only the clean ip:port
     const cleanIpPort = ipPort.replace(/^https?:\/\//, '').replace(/\/+$/, '');
     await AsyncStorage.setItem(SERVER_URL_KEY, cleanIpPort);
     
     return true;
   } catch (error) {
-    console.error('URL configuration error:', error);
     throw new Error(
       axios.isAxiosError(error) 
         ? 'Servidor não respondendo. Verifique o endereço e conexão.'
@@ -86,8 +132,6 @@ export const initializeAPI = async (): Promise<void> => {
       await setBaseURL(saved);
     }
   } catch (error) {
-    console.error('API initialization error:', error);
-    // Fallback to default URL
     api.defaults.baseURL = currentBaseURL;
   }
 };
@@ -110,20 +154,24 @@ api.interceptors.request.use(async (config) => {
       if (jsessionid) {
         config.headers.Cookie = `JSESSIONID=${jsessionid}`;
       }
+      resetInactivityTimer();
     }
     return config;
   } catch (error) {
-    console.error('Request interceptor error:', error);
     return config;
   }
 });
 
 // Response interceptor for error handling
 api.interceptors.response.use(
-  (response) => response,
+  (response) => {
+    resetInactivityTimer();
+    return response;
+  },
   async (error: AxiosError) => {
     if (error.response?.status === 401) {
       await AsyncStorage.removeItem('sankhya_session');
+      clearInactivityTimer();
     }
     
     if (error.code === 'ECONNABORTED') {
@@ -138,7 +186,7 @@ api.interceptors.response.use(
   }
 );
 
-// Login function with improved error handling
+// services/api.ts (parte do login)
 export const login = async (username: string, password: string): Promise<LoginResponse> => {
   const xmlRequest = `<?xml version="1.0" encoding="ISO-8859-1"?>
 <serviceRequest serviceName="MobileLoginSP.login">
@@ -152,29 +200,58 @@ export const login = async (username: string, password: string): Promise<LoginRe
     const response = await api.post(
       'services.sbr?serviceName=MobileLoginSP.login',
       xmlRequest,
-      { responseType: 'text', transformResponse: [data => data] }
+      { 
+        responseType: 'text',
+        transformResponse: [(data) => {
+          // Verifica se a resposta está vazia
+          if (!data || typeof data !== 'string') {
+            throw new Error('Resposta vazia do servidor');
+          }
+          return data;
+        }]
+      }
     );
 
-    if (typeof response.data !== 'string' || !response.data.includes('serviceResponse')) {
-      throw new Error('Resposta inválida do servidor');
+    // Verificação mais robusta da resposta
+    if (typeof response.data !== 'string') {
+      throw new Error('Resposta inválida do servidor: não é texto');
     }
 
     const result = parser.parse(response.data);
 
-    if (!result.serviceResponse || result.serviceResponse['@_status'] !== "1") {
+    // Debug: Mostra a resposta completa no console
+
+    if (!result.serviceResponse) {
+      throw new Error('Estrutura de resposta inválida');
+    }
+
+    if (result.serviceResponse['@_status'] !== "1") {
       const errorMsg = result.serviceResponse?.statusMessage 
         ? Buffer.from(result.serviceResponse.statusMessage, 'base64').toString('utf-8')
-        : 'Credenciais inválidas';
+        : 'Credenciais inválidas ou serviço indisponível';
       throw new Error(errorMsg);
     }
 
-    const sessionData = {
-      jsessionid: result.serviceResponse.responseBody.jsessionid || '',
-      idusu: (result.serviceResponse.responseBody.idusu || '').trim(),
+    // Verificação mais rigorosa dos dados da sessão
+    if (!result.serviceResponse.responseBody || 
+        !result.serviceResponse.responseBody.jsessionid ||
+        !result.serviceResponse.responseBody.idusu) {
+      throw new Error('Dados de sessão incompletos na resposta');
+    }
+
+    const sessionData: LoginResponse = {
+      jsessionid: result.serviceResponse.responseBody.jsessionid,
+      idusu: result.serviceResponse.responseBody.idusu.trim(),
       callID: result.serviceResponse.responseBody.callID || ''
     };
 
-    await AsyncStorage.setItem('sankhya_session', JSON.stringify(sessionData));
+    // Debug: Mostra os dados da sessão
+
+    await AsyncStorage.setItem('sankhya_session', JSON.stringify({
+      ...sessionData,
+      username,
+      timestamp: Date.now()
+    }));
     
     return sessionData;
   } catch (error) {
@@ -190,6 +267,7 @@ export const login = async (username: string, password: string): Promise<LoginRe
 
 export const logout = async (): Promise<void> => {
   try {
+    clearInactivityTimer(); // Isso já remove a subscription do AppState
     await api.post('services.sbr?serviceName=MobileLoginSP.logout');
   } catch (error) {
     console.warn('Logout error:', error);

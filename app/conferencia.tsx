@@ -59,7 +59,7 @@ export default function ConferenciaScreen() {
   const [motivo, setMotivo] = useState('');
 
   // Chave para armazenamento local
-  const storageKey = `conferencia_${nuseparacao}`;
+  const storageKey = `conferencia_${nunota}`;
   const finalizacoesKey = 'conferencia_finalizacoes';
 
   // Opções de motivo para o Picker
@@ -93,8 +93,8 @@ export default function ConferenciaScreen() {
 
         // Busca volumes no servidor se não tiver dados locais
         const result = await queryJson('DbExplorerSP.executeQuery', {
-          sql: `SELECT IDREV, SEQETIQUETA FROM TGWREV 
-                WHERE NUSEPARACAO = ${nuseparacao}
+          sql: `SELECT IDREV, SEQETIQUETA FROM TGWREV
+                WHERE NUNOTA = ${nunota}
                 ORDER BY SEQETIQUETA`
         });
 
@@ -497,7 +497,6 @@ export default function ConferenciaScreen() {
 const styles = StyleSheet.create({
   scrollContainer: {
     flex: 1,
-    backgroundColor: '#f5f5f5',
   },
   scrollContent: {
     paddingBottom: 40,

@@ -110,29 +110,42 @@ export default function ConferenciaListaScreen() {
     return conf.STATUS !== null && matchesSearch;
   });
 
-  const getStatusColor = (volumes: number, volumeTotal: number) => {
-
-    return volumes === volumeTotal ? '#2196F3' : '#F44336'; // Azul se igual, Vermelho se diferente
-  };
+  const getStatusColor = (status: string, volumes: number, volumeTotal: number) => {
+  // Se todos os volumes foram conferidos
+  if (volumes === volumeTotal && volumeTotal > 0) {
+    return '#4CAF50'; // Verde para completo
+  }
+  
+  // Status específicos
+  switch (status) {
+    case 'FINALIZADO':
+    case 'Conferência completa':
+      return '#4CAF50'; // Verde
+    default:
+      return '#F44336'; // Azul se parcial, vermelho se nenhum
+  }
+};
 
   const renderItem = ({ item }: { item: DadosConferencia }) => (
     <TouchableOpacity 
       style={styles.card} 
     >
       <View style={styles.cardHeader}>
-        <Text style={styles.cardTitle}>Nota: {item.NUNOTA}</Text>
+        <Text style={styles.cardTitle}>Pedido: {item.NUNOTA}</Text>
       </View>
       
       <View style={[styles.cardRow, { marginBottom: 4 }]}>
         <Text style={[
           styles.cardStatus,
           { 
-            backgroundColor: getStatusColor(item.VOLUMES, item.VOLUMETOTAL),
+            backgroundColor: getStatusColor(item.STATUS, item.VOLUMES, item.VOLUMETOTAL),
             color: 'white',
             alignSelf: 'flex-start'
           }
         ]}>
-          {item.STATUS}
+          {item.VOLUMES === item.VOLUMETOTAL && item.VOLUMETOTAL > 0 
+            ? 'CONFERIDO' 
+            : item.STATUS}
         </Text>
       </View>
       
@@ -184,8 +197,8 @@ export default function ConferenciaListaScreen() {
           <Ionicons name="arrow-back" size={24} color="white" />
         </TouchableOpacity>
         <Text style={styles.headerTitle}>Lista de Conferências</Text>
-        <TouchableOpacity onPress={buscarTodasConferencias}>
-          <Ionicons name="refresh" size={24} color="white" />
+        <TouchableOpacity>
+          {/* <Ionicons name="refresh" size={24} color="white" /> */}
         </TouchableOpacity>
       </View>
 
@@ -193,7 +206,7 @@ export default function ConferenciaListaScreen() {
         <Ionicons name="search" size={20} color="#999" style={styles.searchIcon} />
         <TextInput
           style={styles.searchInput}
-          placeholder="Buscar por nota ou oc"
+          placeholder="Buscar por pedido ou oc"
           placeholderTextColor="#999"
           value={searchTerm}
           onChangeText={setSearchTerm}

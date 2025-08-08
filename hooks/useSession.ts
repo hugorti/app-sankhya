@@ -1,7 +1,6 @@
-// hooks/useSession.ts
 import { useState, useEffect } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { login as apiLogin } from '../services/api';
+import { login as apiLogin, logout as apiLogout, setupInactivityListener, clearInactivityTimer } from '../services/api';
 import { useRouter } from 'expo-router';
 
 interface SankhyaSession {
@@ -12,11 +11,29 @@ interface SankhyaSession {
   timestamp: number;
 }
 
+// hooks/useSession.ts
 export function useSession() {
   const [session, setSession] = useState<SankhyaSession | null>(null);
-  const [loading, setLoading] = useState(true); // Começa como true para carregar a sessão
+  const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const router = useRouter();
+
+  const performLogout = async (): Promise<void> => {
+    try {
+      await apiLogout();
+    } catch (err) {
+      console.error('Erro ao fazer logout na API:', err);
+    } finally {
+      await AsyncStorage.removeItem('sankhya_session');
+      setSession(null);
+      clearInactivityTimer();
+    }
+  };
+
+  const handleInactiveLogout = async (): Promise<void> => {
+    await performLogout();
+    router.replace('/login');
+  };
 
   useEffect(() => {
     const loadSession = async () => {
@@ -24,8 +41,13 @@ export function useSession() {
         const storedSession = await AsyncStorage.getItem('sankhya_session');
         if (storedSession) {
           const parsedSession = JSON.parse(storedSession);
-          // Verifica se a sessão ainda é válida (opcional: pode adicionar tempo de expiração)
-          setSession(parsedSession);
+          // Verifica se a sessão ainda é válida
+          if (parsedSession.jsessionid && parsedSession.idusu) {
+            setSession(parsedSession);
+            setupInactivityListener(handleInactiveLogout);
+          } else {
+            await AsyncStorage.removeItem('sankhya_session');
+          }
         }
       } catch (err) {
         console.error('Erro ao carregar sessão:', err);
@@ -35,6 +57,10 @@ export function useSession() {
     };
 
     loadSession();
+
+    return () => {
+      clearInactivityTimer();
+    };
   }, []);
 
   const login = async (username: string, password: string): Promise<void> => {
@@ -44,35 +70,43 @@ export function useSession() {
     try {
       const result = await apiLogin(username, password);
       
-      const newSession = {
+      const newSession: SankhyaSession = {
         ...result,
         username,
         timestamp: Date.now()
       };
 
+      // Verificação adicional dos dados da sessão
+      if (!newSession.jsessionid || !newSession.idusu) {
+        throw new Error('Dados de sessão inválidos recebidos do servidor');
+      }
+
       setSession(newSession);
       await AsyncStorage.setItem('sankhya_session', JSON.stringify(newSession));
+      setupInactivityListener(handleInactiveLogout);
       
-      // Redireciona para a tela inicial após login
+      // Navegação após login bem-sucedido
       router.replace('/(tabs)');
     } catch (err) {
-      await AsyncStorage.removeItem('sankhya_session');
-      setSession(null);
-      setError(err instanceof Error ? err.message : 'Falha no login');
-      throw err;
+      // Limpeza em caso de erro
+      await performLogout();
+      
+      const errorMessage = err instanceof Error ? err.message : 'Falha no login';
+      setError(errorMessage);
+      
+      throw new Error(errorMessage);
     } finally {
       setLoading(false);
     }
   };
 
   const logout = async (): Promise<void> => {
+    setLoading(true);
     try {
-      await AsyncStorage.removeItem('sankhya_session');
-      setSession(null);
-      // Redireciona para a tela de login após logout
+      await performLogout();
       router.replace('/login');
-    } catch (err) {
-      console.error('Erro durante logout:', err);
+    } finally {
+      setLoading(false);
     }
   };
 

@@ -1,11 +1,21 @@
 // app/login.tsx
 import { useState, useEffect } from 'react';
-import { View, TextInput, StyleSheet, Text, ActivityIndicator, Alert, TouchableOpacity } from 'react-native';
+import { 
+  View, 
+  TextInput, 
+  StyleSheet, 
+  Text, 
+  ActivityIndicator, 
+  Alert, 
+  TouchableOpacity, 
+  SafeAreaView 
+} from 'react-native';
 import { useRouter } from 'expo-router';
 import { useSession } from '../hooks/useSession';
 import { MaterialIcons } from '@expo/vector-icons';
 import ServerConfigModal from '../components/ServerConfigModal';
 import { setBaseURL } from '../services/api';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 export default function LoginScreen() {
   const [username, setUsername] = useState('');
@@ -16,12 +26,34 @@ export default function LoginScreen() {
   const router = useRouter();
   const { login, loading, error } = useSession();
 
+  // Carrega o último usuário salvo ao abrir a tela
+  useEffect(() => {
+    const loadLastUsername = async () => {
+      try {
+        const savedUsername = await AsyncStorage.getItem('lastUsername');
+        if (savedUsername) {
+          setUsername(savedUsername);
+        }
+      } catch (err) {
+        console.error('Erro ao carregar último usuário:', err);
+      }
+    };
+    loadLastUsername();
+  }, []);
+
+  // Validação de formulário
   useEffect(() => {
     setIsFormValid(username.trim().length > 0 && password.trim().length > 0);
   }, [username, password]);
 
-  const handleUsernameChange = (text: string) => {
-    setUsername(text.toUpperCase());
+  const handleUsernameChange = async (text: string) => {
+    const formatted = text.toUpperCase();
+    setUsername(formatted);
+    try {
+      await AsyncStorage.setItem('lastUsername', formatted); // salva enquanto digita
+    } catch (err) {
+      console.error('Erro ao salvar usuário:', err);
+    }
   };
 
   const handleLogin = async () => {
@@ -57,30 +89,36 @@ export default function LoginScreen() {
     ]);
   };
 
-  const handleLoginError = (error: Error) => {
-    let errorMessage = 'Não foi possível fazer login:\n\n';
-    
-    if (error.message.includes('Timeout')) {
-      errorMessage += '• Verifique sua conexão com a internet\n';
-      errorMessage += '• O servidor pode estar indisponível\n';
-      errorMessage += '• Verifique se o endereço do servidor está correto\n';
-    } else if (error.message.includes('Credenciais')) {
-      errorMessage += '• Usuário ou senha incorretos\n';
-    } else {
-      errorMessage += `• ${error.message}\n`;
-    }
+const handleLoginError = (error: Error) => {
+  let errorMessage = 'Não foi possível fazer login.\n\n';
 
-    Alert.alert('Erro no Login', errorMessage, [
-      { text: 'Entendi', style: 'cancel' }
-    ]);
-  };
+  if (error.message.includes('Timeout')) {
+    errorMessage +=
+      '• Verifique sua conexão com a internet.\n' +
+      '• O servidor pode estar indisponível.\n' +
+      '• Confira se o endereço do servidor está correto.';
+  } 
+  else if (error.message.includes('Credenciais')) {
+    errorMessage += '• Usuário ou senha incorreto';
+  } 
+  else {
+    errorMessage += `• Usuário ou senha incorreto`;
+  }
+
+  Alert.alert(
+    'Erro no Login',
+    errorMessage,
+    [{ text: 'OK', style: 'cancel' }]
+  );
+};
+
 
   const toggleSecureEntry = () => {
     setSecureTextEntry(!secureTextEntry);
   };
 
   return (
-    <View style={styles.container}>
+    <SafeAreaView style={styles.container}>
       <ServerConfigModal
         visible={configModalVisible}
         onClose={() => setConfigModalVisible(false)}
@@ -94,7 +132,6 @@ export default function LoginScreen() {
       
       {/* Campo de Usuário */}
       <View style={styles.inputContainer}>
-        {/* <Text style={styles.label}>USUÁRIO</Text> */}
         <View style={styles.inputWrapper}>
           <MaterialIcons name="person" size={24} color="#9c27b0" style={styles.icon} />
           <TextInput
@@ -113,7 +150,6 @@ export default function LoginScreen() {
       
       {/* Campo de Senha */}
       <View style={styles.inputContainer}>
-        {/* <Text style={styles.label}>SENHA</Text> */}
         <View style={styles.inputWrapper}>
           <MaterialIcons name="lock" size={24} color="#9c27b0" style={styles.icon} />
           <TextInput
@@ -167,7 +203,7 @@ export default function LoginScreen() {
       <View style={styles.footer}>
         <Text style={styles.footerText}>Versão 1.0.0</Text>
       </View>
-    </View>
+    </SafeAreaView>
   );
 }
 
@@ -201,14 +237,6 @@ const styles = StyleSheet.create({
   },
   inputContainer: {
     marginBottom: 5,
-  },
-  label: {
-    fontSize: 12,
-    fontWeight: '600',
-    color: '#6a1b9a',
-    marginBottom: 8,
-    textTransform: 'uppercase',
-    letterSpacing: 0.5,
   },
   inputWrapper: {
     flexDirection: 'row',

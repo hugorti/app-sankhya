@@ -14,3 +14,7 @@ local.properties
 
 # Bundle artifacts
 *.jsbundle
+
+# Adicione ao .gitignore!
+storePassword=Pal.135563
+keyPassword=Pal.135563
