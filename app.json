@@ -12,6 +12,7 @@
       "resizeMode": "contain"
     },
     "android": {
+      "edgeToEdge": true,
       "adaptiveIcon": {
         "foregroundImage": "./assets/images/logo.png",
         "monochromeImage": "./assets/images/logo.png"

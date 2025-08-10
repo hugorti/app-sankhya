@@ -25,8 +25,8 @@ export default function ExpedicaoScreen() {
   const [error, setError] = useState<string | null>(null);
   const [ordemCarga, setOrdemCarga] = useState('');
   const [nunota, setNunota] = useState('');
-
   const [mostrarDados, setMostrarDados] = useState(true);
+  const [conferidos, setConferidos] = useState<number[]>([]);
 
   const buscarDados = async () => {
     if (!session?.jsessionid || !ordemCarga.trim() || !nunota.trim()) return;
@@ -35,7 +35,7 @@ export default function ExpedicaoScreen() {
       setLoading(true);
       setError(null);
       setDados(null);
-      setMostrarDados(true)
+      setMostrarDados(true);
       
       const sqlQuery = `
         SELECT
@@ -85,7 +85,7 @@ export default function ExpedicaoScreen() {
 
       if (result.rows.length > 0) {
         const primeiroRegistro = result.rows[0];
-        setDados({
+        const novoDados = {
           SEQETIQUETA: primeiroRegistro[0],
           ORDEMCARGA: primeiroRegistro[1],
           NUCONFERENCIA: primeiroRegistro[2],
@@ -95,7 +95,18 @@ export default function ExpedicaoScreen() {
           VOLUMES: primeiroRegistro[6] || 0,
           STATUS: primeiroRegistro[7] || 'PENDENTE',
           CONFERENTE: primeiroRegistro[8] || 'PENDENTE'
-        });
+        };
+        
+        setDados(novoDados);
+        
+        // Extrai os volumes já conferidos do formato "X/Y"
+        if (typeof novoDados.VOLUMES === 'string') {
+          const match = novoDados.VOLUMES.toString().match(/(\d+)\s*\/\s*(\d+)/);
+          if (match) {
+            const conferidosCount = parseInt(match[1], 10);
+            setConferidos(Array.from({length: conferidosCount}, (_, i) => i + 1));
+          }
+        }
       } else {
         setError('Nenhuma expedição encontrada para os filtros informados');
       }
@@ -108,8 +119,8 @@ export default function ExpedicaoScreen() {
   };
 
   const abrirConferencia = () => {
-     if (dados) {
-      setMostrarDados(false); // Oculta os dados ao iniciar a conferência
+    if (dados) {
+      setMostrarDados(false);
       router.push({
         pathname: '/conferencia',
         params: {
@@ -119,20 +130,19 @@ export default function ExpedicaoScreen() {
           nunota: nunota,
           volumes: dados.VOLUMES,
           status: dados.STATUS,
-          conferente: dados.CONFERENTE
+          conferente: dados.CONFERENTE,
+          volumesConferidos: JSON.stringify(conferidos) // Envia os volumes já conferidos
         }
       });
     }
   };
 
-  // Função para extrair o número de volumes expedidos
   const getVolumesExpedidos = (volumesString: string | number) => {
     const str = volumesString.toString();
     const match = str.match(/(\d+)/);
     return match ? parseInt(match[1], 10) : 0;
   };
 
-  // Verifica se todos os volumes foram expedidos
   const todosExpedidos = dados ? 
     getVolumesExpedidos(dados.VOLUMES) >= dados.TOTAL_VOLUMES : 
     false;
@@ -271,7 +281,7 @@ export default function ExpedicaoScreen() {
                 onPress={abrirConferencia}
               >
                 <Ionicons name="refresh-circle-outline" size={24} color="white" />
-                <Text style={styles.actionButtonText}>RECONTAR</Text>
+                <Text style={styles.actionButtonText}>CONTINUAR CONFERÊNCIA ({conferidos.length}/{dados.TOTAL_VOLUMES})</Text>
               </TouchableOpacity>
             ) : null}
 
@@ -413,21 +423,5 @@ const styles = StyleSheet.create({
     fontWeight: '500',
     color: '#333',
     flex: 1,
-  },
-  conferirButton: {
-    flexDirection: 'row',
-    backgroundColor: '#2196F3',
-    padding: 16,
-    borderRadius: 8,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginTop: 16,
-    opacity: 1,
-  },
-  conferirButtonText: {
-    color: 'white',
-    fontWeight: 'bold',
-    fontSize: 16,
-    marginLeft: 8,
   },
 });

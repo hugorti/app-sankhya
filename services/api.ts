@@ -9,7 +9,7 @@ const SERVER_URL_KEY = 'saved_server_url';
 const DEFAULT_IP = '';
 const DEFAULT_PORT = '8180';
 const DEFAULT_URL = `${DEFAULT_IP}:${DEFAULT_PORT}`;
-const INACTIVITY_TIMEOUT = 60000; // 5 minutos em milissegundos
+const INACTIVITY_TIMEOUT = 1 * 60 * 1000; // 2 minutos em milissegundos
 
 const parser = new XMLParser({
   attributeNamePrefix: '@_',
@@ -26,30 +26,22 @@ interface LoginResponse {
 
 let currentBaseURL = `http://${DEFAULT_URL}/mge/`;
 let inactivityTimer: number | null = null;
-let appStateListener: (() => void) | null = null;
+let lastActivityTime: number | null = null;
 let onInactiveCallback: (() => Promise<void>) | null = null;
-
 let appStateSubscription: { remove: () => void } | null = null;
 
 // Funções para gerenciar inatividade
-const resetInactivityTimer = () => {
-  if (inactivityTimer) {
-    clearTimeout(inactivityTimer);
-  }
-  
-  inactivityTimer = setTimeout(async () => {
-    try {
-      if (onInactiveCallback) {
-        await onInactiveCallback();
-      }
-    } catch (error) {
-      console.error('Erro durante logout automático:', error);
-    }
-  }, INACTIVITY_TIMEOUT) as unknown as number;
-};
-
 export const setupInactivityListener = (callback: () => Promise<void>) => {
-  onInactiveCallback = callback;
+  onInactiveCallback = async () => {
+    try {
+      await logout(true); // Logout automático
+      await callback();
+    } catch (error) {
+      // Garante que a sessão seja removida mesmo com erro
+      await AsyncStorage.removeItem('sankhya_session');
+      await callback();
+    }
+  };
   
   // Limpar subscription existente
   if (appStateSubscription) {
@@ -57,11 +49,25 @@ export const setupInactivityListener = (callback: () => Promise<void>) => {
     appStateSubscription = null;
   }
 
-  // Configurar novo listener
-  appStateSubscription = AppState.addEventListener('change', (nextAppState: AppStateStatus) => {
+  // Registrar tempo atual como última atividade
+  lastActivityTime = Date.now();
+
+  // Configurar listener do estado do app
+  appStateSubscription = AppState.addEventListener('change', async (nextAppState: AppStateStatus) => {
     if (nextAppState === 'active') {
-      resetInactivityTimer();
+      // Quando o app volta ao ativo, verificar quanto tempo ficou inativo
+      if (lastActivityTime) {
+        const inactiveTime = Date.now() - lastActivityTime;
+        if (inactiveTime >= INACTIVITY_TIMEOUT) {
+          await callback();
+        } else {
+          // Se ainda não passou o tempo limite, reiniciar o timer
+          lastActivityTime = Date.now();
+          resetInactivityTimer();
+        }
+      }
     } else {
+      // Quando o app vai para background, limpar o timer
       clearInactivityTimer();
     }
   });
@@ -69,15 +75,23 @@ export const setupInactivityListener = (callback: () => Promise<void>) => {
   resetInactivityTimer();
 };
 
+export const resetInactivityTimer = () => {
+  clearInactivityTimer();
+  
+  if (onInactiveCallback) {
+    inactivityTimer = setTimeout(async () => {
+      await onInactiveCallback!();
+    }, INACTIVITY_TIMEOUT) as unknown as number;
+  }
+  
+  // Atualizar o momento da última atividade
+  lastActivityTime = Date.now();
+};
+
 export const clearInactivityTimer = () => {
   if (inactivityTimer) {
     clearTimeout(inactivityTimer);
     inactivityTimer = null;
-  }
-  
-  if (appStateSubscription) {
-    appStateSubscription.remove();
-    appStateSubscription = null;
   }
 };
 
@@ -100,15 +114,43 @@ const formatServerUrl = (ipPort: string): string => {
   return `http://${ip}:${port}/mge/`;
 };
 
+const configureInterceptors = () => {
+  // Request interceptor
+  api.interceptors.request.use(async (config) => {
+    try {
+      const session = await AsyncStorage.getItem('sankhya_session');
+      if (session) {
+        const { jsessionid } = JSON.parse(session);
+        if (jsessionid) {
+          config.headers.Cookie = `JSESSIONID=${jsessionid}`;
+        }
+        resetInactivityTimer();
+      }
+      return config;
+    } catch (error) {
+      return config;
+    }
+  });
+
+  // Response interceptor (mantenha o mesmo que já temos)
+  api.interceptors.response.use(/* ... */);
+};
+
 // Set base URL with validation
 export const setBaseURL = async (ipPort: string): Promise<boolean> => {
   try {
     const formattedUrl = formatServerUrl(ipPort);
+    
+    // Testa a nova URL
     await axios.get(formattedUrl, { timeout: 5000 });
     
+    // Atualiza a URL base global
     currentBaseURL = formattedUrl;
-    api.defaults.baseURL = currentBaseURL;
     
+    // Recria a instância do axios com a nova URL
+    recreateApiInstance(currentBaseURL);
+    
+    // Salva a nova URL
     const cleanIpPort = ipPort.replace(/^https?:\/\//, '').replace(/\/+$/, '');
     await AsyncStorage.setItem(SERVER_URL_KEY, cleanIpPort);
     
@@ -129,14 +171,30 @@ export const initializeAPI = async (): Promise<void> => {
   try {
     const saved = await AsyncStorage.getItem(SERVER_URL_KEY);
     if (saved) {
-      await setBaseURL(saved);
+      const formattedUrl = formatServerUrl(saved);
+      currentBaseURL = formattedUrl;
+      recreateApiInstance(currentBaseURL);
     }
   } catch (error) {
-    api.defaults.baseURL = currentBaseURL;
+    console.error('Failed to initialize API:', error);
+    throw error;
   }
 };
 
-const api: AxiosInstance = axios.create({
+const recreateApiInstance = (baseUrl: string) => {
+  api = axios.create({
+    baseURL: baseUrl,
+    timeout: 15000,
+    headers: {
+      'Content-Type': 'application/xml; charset=ISO-8859-1',
+      'Accept': 'application/xml'
+    }
+  });
+  configureInterceptors(); // Reconfigura os interceptors
+};
+
+// Mude de const para let
+let api: AxiosInstance = axios.create({
   baseURL: currentBaseURL,
   timeout: 15000,
   headers: {
@@ -169,24 +227,28 @@ api.interceptors.response.use(
     return response;
   },
   async (error: AxiosError) => {
+    // Ignora erros de logout
+    if (error.config?.url?.includes('MobileLoginSP.logout')) {
+      return Promise.reject(error);
+    }
+
+    // Trata outros erros
     if (error.response?.status === 401) {
       await AsyncStorage.removeItem('sankhya_session');
       clearInactivityTimer();
-    }
-    
-    if (error.code === 'ECONNABORTED') {
-      throw new Error('Timeout: O servidor não respondeu');
-    }
-    
-    if (!error.response) {
-      throw new Error('Erro de conexão. Verifique sua internet.');
+    } else if (!error.response) {
+      // Se não houve resposta, verifica se é erro de rede
+      if (error.code === 'ERR_NETWORK') {
+        // Mantém a sessão se for erro de rede (pode ser temporário)
+        return Promise.reject(new Error('Erro de conexão. Verifique sua internet.'));
+      }
+      throw new Error('Erro de comunicação com o servidor');
     }
     
     return Promise.reject(error);
   }
 );
 
-// services/api.ts (parte do login)
 export const login = async (username: string, password: string): Promise<LoginResponse> => {
   const xmlRequest = `<?xml version="1.0" encoding="ISO-8859-1"?>
 <serviceRequest serviceName="MobileLoginSP.login">
@@ -197,13 +259,14 @@ export const login = async (username: string, password: string): Promise<LoginRe
 </serviceRequest>`;
 
   try {
+    // Limpa qualquer timer pendente
+    clearInactivityTimer();
     const response = await api.post(
       'services.sbr?serviceName=MobileLoginSP.login',
       xmlRequest,
       { 
         responseType: 'text',
         transformResponse: [(data) => {
-          // Verifica se a resposta está vazia
           if (!data || typeof data !== 'string') {
             throw new Error('Resposta vazia do servidor');
           }
@@ -212,14 +275,11 @@ export const login = async (username: string, password: string): Promise<LoginRe
       }
     );
 
-    // Verificação mais robusta da resposta
     if (typeof response.data !== 'string') {
       throw new Error('Resposta inválida do servidor: não é texto');
     }
 
     const result = parser.parse(response.data);
-
-    // Debug: Mostra a resposta completa no console
 
     if (!result.serviceResponse) {
       throw new Error('Estrutura de resposta inválida');
@@ -232,7 +292,6 @@ export const login = async (username: string, password: string): Promise<LoginRe
       throw new Error(errorMsg);
     }
 
-    // Verificação mais rigorosa dos dados da sessão
     if (!result.serviceResponse.responseBody || 
         !result.serviceResponse.responseBody.jsessionid ||
         !result.serviceResponse.responseBody.idusu) {
@@ -245,15 +304,18 @@ export const login = async (username: string, password: string): Promise<LoginRe
       callID: result.serviceResponse.responseBody.callID || ''
     };
 
-    // Debug: Mostra os dados da sessão
-
     await AsyncStorage.setItem('sankhya_session', JSON.stringify({
       ...sessionData,
       username,
       timestamp: Date.now()
     }));
     
+        setupInactivityListener(async () => {
+      console.log('Sessão expirada por inatividade');
+    });
+
     return sessionData;
+
   } catch (error) {
     throw new Error(
       axios.isAxiosError(error)
@@ -265,17 +327,30 @@ export const login = async (username: string, password: string): Promise<LoginRe
   }
 };
 
-export const logout = async (): Promise<void> => {
+export const logout = async (isAutoLogout = false): Promise<void> => {
   try {
-    clearInactivityTimer(); // Isso já remove a subscription do AppState
-    await api.post('services.sbr?serviceName=MobileLoginSP.logout');
+    clearInactivityTimer();
+    
+    // Se for logout automático, tenta apenas uma vez rapidamente
+    if (isAutoLogout) {
+      await Promise.race([
+        api.post('services.sbr?serviceName=MobileLoginSP.logout'),
+        new Promise((_, reject) => setTimeout(() => reject(new Error('Timeout')), 2000))
+      ]);
+    } else {
+      // Logout manual - tenta normalmente
+      await api.post('services.sbr?serviceName=MobileLoginSP.logout');
+    }
   } catch (error) {
-    console.warn('Logout error:', error);
+    // Ignora erros específicos de network/timeout no logout automático
+    if (!isAutoLogout || 
+        (axios.isAxiosError(error) && error.code !== 'ECONNABORTED' && error.code !== 'ERR_NETWORK')) {
+      console.warn('Logout error:', error);
+    }
   } finally {
     await AsyncStorage.removeItem('sankhya_session');
   }
 };
-
 export const queryJson = async (serviceName: string, requestBody: object): Promise<any> => {
   try {
     const response = await api.post(

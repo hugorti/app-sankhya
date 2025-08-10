@@ -2,9 +2,7 @@
   <style name="AppTheme" parent="Theme.AppCompat.DayNight.NoActionBar">
     <item name="android:editTextBackground">@drawable/rn_edit_text_material</item>
     <item name="colorPrimary">@color/colorPrimary</item>
-    <!-- Altere para transparente -->
-    <item name="android:statusBarColor">@android:color/transparent</item>
-    <!-- Adicione estes itens para tornar a status bar realmente transparente -->
+    <item name="android:statusBarColor">#ffffff</item>
     <item name="android:windowTranslucentStatus">true</item>
     <item name="android:windowTranslucentNavigation">false</item>
     <item name="android:windowDrawsSystemBarBackgrounds">true</item>

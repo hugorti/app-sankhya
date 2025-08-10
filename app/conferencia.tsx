@@ -1,4 +1,3 @@
-// app/conferencia.tsx
 import { useState, useEffect } from 'react';
 import { View, Text, StyleSheet, TextInput, TouchableOpacity, Alert, ActivityIndicator, ScrollView, Modal } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
@@ -34,7 +33,7 @@ interface FinalizacaoData {
   volumesFaltantes: number[];
   motivo?: string;
   completa: boolean;
-  situacao: string; // Adicionado esta linha
+  situacao: string;
 }
 
 export default function ConferenciaScreen() {
@@ -47,6 +46,7 @@ export default function ConferenciaScreen() {
   const totalVolumes = Number(params.totalVolumes);
   const ordemCarga = Number(params.ordemCarga);
   const nunota = params.nunota as string;
+  const volumesConferidosParam = params.volumesConferidos as string;
   
   const [volumes, setVolumes] = useState<Volume[]>([]);
   const [conferidos, setConferidos] = useState<number[]>([]);
@@ -77,7 +77,7 @@ export default function ConferenciaScreen() {
         setLoading(true);
         setError(null);
         
-        // Tenta carregar dados salvos localmente primeiro
+        // 1. Tenta carregar dados salvos localmente (prioridade máxima)
         const savedData = await AsyncStorage.getItem(storageKey);
         if (savedData) {
           const parsedData: ConferenciaData = JSON.parse(savedData);
@@ -91,7 +91,13 @@ export default function ConferenciaScreen() {
           }
         }
 
-        // Busca volumes no servidor se não tiver dados locais
+        // 2. Se não tiver dados locais, verifica os parâmetros recebidos
+        let conferidosIniciais: number[] = [];
+        if (volumesConferidosParam) {
+          conferidosIniciais = JSON.parse(volumesConferidosParam);
+        }
+
+        // 3. Busca volumes no servidor
         const result = await queryJson('DbExplorerSP.executeQuery', {
           sql: `SELECT IDREV, SEQETIQUETA FROM TGWREV
                 WHERE NUNOTA = ${nunota}
@@ -104,11 +110,13 @@ export default function ConferenciaScreen() {
         }));
 
         setVolumes(volumesData);
+        setConferidos(conferidosIniciais);
         
+        // Salva os dados carregados
         await saveConferenciaData({
           volumes: volumesData,
-          conferidos: savedData ? JSON.parse(savedData).conferidos : [],
-          ultimoConferido: savedData ? JSON.parse(savedData).ultimoConferido : null
+          conferidos: conferidosIniciais,
+          ultimoConferido: null
         });
         
       } catch (err) {
@@ -122,9 +130,9 @@ export default function ConferenciaScreen() {
   }, []);
 
   useEffect(() => {
-  if (inputValue.length === 7) {
-    handleConferir();
-  }
+    if (inputValue.length === 7) {
+      handleConferir();
+    }
   }, [inputValue]);
 
   const saveConferenciaData = async (data: ConferenciaData) => {
@@ -181,6 +189,7 @@ export default function ConferenciaScreen() {
     
     setInputValue('');
     
+    // Confirmação automática por etiqueta
     const volumePorEtiqueta = volumes.find(v => v.SEQETIQUETA.toString() === inputValue);
     if (volumePorEtiqueta && volumePorEtiqueta.IDREV !== id) {
       const novosConferidosComEtiqueta = [...novosConferidos, volumePorEtiqueta.IDREV];
@@ -211,66 +220,69 @@ export default function ConferenciaScreen() {
   };
 
   const confirmarFinalizacao = async () => {
-  const faltantes = volumes
-    .filter(v => !conferidos.includes(v.IDREV))
-    .map(v => v.IDREV);
+    const faltantes = volumes
+      .filter(v => !conferidos.includes(v.IDREV))
+      .map(v => v.IDREV);
 
-  const completa = faltantes.length === 0;
-  const situacao = completa ? "Conferência completa" : "Conferência com divergência"; // Nova linha
-  const volumesFormatado = `${conferidos.length} / ${totalVolumes}`;
+    const completa = faltantes.length === 0;
+    const situacao = completa ? "Conferência completa" : "Conferência com divergência";
+    const volumesFormatado = `${conferidos.length} / ${totalVolumes}`;
 
-  try {
-    // Salva na API
-    await salvarConferenciaAPI({
-      NUNOTA: Number(nunota),
-      ORDEMCARGA: ordemCarga,
-      CONFERENTE: session?.username || 'Usuário desconhecido',
-      DESCRICAO: completa ? 'CONFERENCIA COMPLETA' : motivo,
-      VOLUMES: volumesFormatado,
-      COMPLETA: completa // Adicionado esta linha
-    });
+    try {
+      // Salva na API
+      await salvarConferenciaAPI({
+        NUNOTA: Number(nunota),
+        ORDEMCARGA: ordemCarga,
+        CONFERENTE: session?.username || 'Usuário desconhecido',
+        DESCRICAO: completa ? 'Conferência completa' : motivo,
+        VOLUMES: volumesFormatado,
+        COMPLETA: completa
+      });
 
-    // Salva localmente
-    const finalizacaoLocal: FinalizacaoData = {
-      nuseparacao,
-      nunota,
-      ordemCarga,
-      usuario: session?.username || 'Usuário desconhecido',
-      dataFinalizacao: new Date().toISOString(),
-      volumesConferidos: [...conferidos],
-      volumesFaltantes: [...faltantes],
-      motivo: completa ? undefined : motivo,
-      completa,
-      situacao // Adicionado esta linha
-    };
-    await saveFinalizacaoData(finalizacaoLocal);
+      // Salva localmente para histórico
+      const finalizacaoLocal: FinalizacaoData = {
+        nuseparacao,
+        nunota,
+        ordemCarga,
+        usuario: session?.username || 'Usuário desconhecido',
+        dataFinalizacao: new Date().toISOString(),
+        volumesConferidos: [...conferidos],
+        volumesFaltantes: [...faltantes],
+        motivo: completa ? undefined : motivo,
+        completa,
+        situacao
+      };
+      
+      await saveFinalizacaoData(finalizacaoLocal);
 
-    await AsyncStorage.removeItem(storageKey);
-    setShowMotivoModal(false);
-    setMotivo('');
+      setShowMotivoModal(false);
+      setMotivo('');
 
-    if (completa) {
+      if (completa) {
+        // Se completou tudo, pode limpar os dados
+        await AsyncStorage.removeItem(storageKey);
+        Alert.alert(
+          'Conferência completa!',
+          `Todos os ${totalVolumes} volumes foram conferidos`,
+          [{ text: 'OK', onPress: () => router.back() }]
+        );
+      } else {
+        // Se não completou, mantém os dados para continuar depois
+        Alert.alert(
+          'Conferência salva',
+          `Progresso salvo. ${conferidos.length} volumes conferidos de ${totalVolumes}.`,
+          [{ text: 'OK', onPress: () => router.back() }]
+        );
+      }
+    } catch (error) {
       Alert.alert(
-        'Conferência completa!',
-        `Todos os ${totalVolumes} volumes foram conferidos`,
-        [{ text: 'OK', onPress: () => router.back() }]
+        'Erro',
+        'Ocorreu um erro ao salvar a conferência. Tente novamente.',
+        [{ text: 'OK' }]
       );
-    } else {
-      Alert.alert(
-        'Conferência finalizada',
-        `Conferência finalizada com ${totalVolumes - conferidos.length} volumes faltantes.`,
-        [{ text: 'OK', onPress: () => router.back() }]
-      );
+      console.error('Erro ao salvar conferência:', error);
     }
-  } catch (error) {
-    Alert.alert(
-      'Erro',
-      'Ocorreu um erro ao salvar a conferência. Tente novamente.',
-      [{ text: 'OK' }]
-    );
-    console.error('Erro ao salvar conferência:', error);
-  }
-};
+  };
 
   const solicitarMotivo = () => {
     setShowMotivoModal(true);
@@ -286,6 +298,29 @@ export default function ConferenciaScreen() {
     } else {
       solicitarMotivo();
     }
+  };
+
+  const reiniciarConferencia = async () => {
+    Alert.alert(
+      'Reiniciar Conferência',
+      'Tem certeza que deseja reiniciar a contagem? Todos os volumes conferidos serão perdidos.',
+      [
+        {
+          text: 'Cancelar',
+          style: 'cancel'
+        },
+        {
+          text: 'Reiniciar',
+          onPress: async () => {
+            await AsyncStorage.removeItem(storageKey);
+            setConferidos([]);
+            setUltimoConferido(null);
+            Alert.alert('Conferência reiniciada', 'A contagem foi reiniciada do zero');
+          },
+          style: 'destructive'
+        }
+      ]
+    );
   };
 
   if (loading) {
@@ -321,6 +356,9 @@ export default function ConferenciaScreen() {
         <Text style={styles.infoText}>Nota: {nunota}</Text>
         <Text style={styles.infoText}>Separação: {nuseparacao}</Text>
         <Text style={styles.infoText}>Usuário: {session?.username || 'Não identificado'}</Text>
+        <Text style={styles.infoText}>
+          Progresso: {conferidos.length}/{totalVolumes} volumes
+        </Text>
       </View>
 
       {/* Progresso */}
@@ -357,7 +395,7 @@ export default function ConferenciaScreen() {
           autoFocus
           autoCorrect={false}
           autoCapitalize="none"
-          maxLength={7} // Adicione isso para limitar a 7 dígitos
+          maxLength={7}
         />
         <TouchableOpacity
           style={styles.confirmButton} 
@@ -377,24 +415,36 @@ export default function ConferenciaScreen() {
           <Text style={styles.finishButtonText}>Volumes</Text>
         </TouchableOpacity>
         
-        <TouchableOpacity
-      style={[
-        styles.finishButton,
-        { 
-          backgroundColor: conferidos.length === totalVolumes ? '#4CAF50' : '#2196F3',
-          flexDirection: 'column' 
-        }
-      ]}
-      onPress={finalizarConferencia}
-    >
-      <Text style={styles.finishButtonText}>
-        {conferidos.length === totalVolumes ? 'Conferência Completa!' : 'Finalizar Conferência'}
-      </Text>
-     
-    </TouchableOpacity>
+       <TouchableOpacity
+          style={[
+            styles.finishButton,
+            { 
+              backgroundColor: conferidos.length === totalVolumes ? '#4CAF50' : '#2196F3',
+              opacity: conferidos.length > 0 ? 1 : 0.5 // Desativa visualmente quando zero volumes
+            }
+          ]}
+          onPress={finalizarConferencia}
+          disabled={conferidos.length === 0} // Desativa funcionalmente quando zero volumes
+        >
+          <Text style={styles.finishButtonText}>
+            Finalizar Conferência
+          </Text>
+        </TouchableOpacity>
       </View>
 
-      {/* Modal de motivo (com Picker) */}
+      {/* Botão para reiniciar contagem */}
+      <TouchableOpacity
+        style={[styles.volumesButton, { 
+          backgroundColor: '#F44336',
+          marginTop: 8,
+          marginHorizontal: 16
+        }]}
+        onPress={reiniciarConferencia}
+      >
+        <Text style={styles.finishButtonText}>Reiniciar Contagem</Text>
+      </TouchableOpacity>
+
+      {/* Modal de motivo */}
       <Modal
         visible={showMotivoModal}
         animationType="slide"
@@ -449,47 +499,46 @@ export default function ConferenciaScreen() {
       </Modal>
 
       {/* Modal de volumes faltantes */}
-    <Modal
-      visible={showVolumesModal}
-      animationType="slide"
-      transparent={true}
-      onRequestClose={() => setShowVolumesModal(false)}
-    >
-      <View style={styles.modalContainer}>
-        <View style={styles.modalContent}>
-          <Text style={styles.modalTitle}>Volumes Faltantes</Text>
-          <Text style={styles.modalSubtitle}>
-            {totalVolumes - conferidos.length} volumes não conferidos (de um total de {totalVolumes})
-          </Text>
-          <Text style={[
-            styles.situacaoText,
-            conferidos.length === totalVolumes ? styles.situacaoComplete : styles.situacaoDivergencia
-          ]}>
-            Situação: {conferidos.length === totalVolumes ? 'Conferência completa' : 'Conferência com divergência'}
-          </Text>
-          
-          <ScrollView style={styles.volumesList}>
-            {volumes
-              .filter(v => !conferidos.includes(v.IDREV))
-              .slice(0, totalVolumes - conferidos.length)
-              .map((volume, index) => (
-                <View key={index} style={styles.volumeItem}>
-                  <Text style={styles.volumeText}>ID: {volume.IDREV}</Text>
-                  <Text style={styles.volumeSubText}>Etiqueta: {volume.SEQETIQUETA}</Text>
-                </View>
-              ))
-            }
-          </ScrollView>
-          
-          <TouchableOpacity
-            style={[styles.modalButton, styles.confirmModalButton]}
-            onPress={() => setShowVolumesModal(false)}
-          >
-            <Text style={styles.modalButtonText}>Fechar</Text>
-          </TouchableOpacity>
+      <Modal
+        visible={showVolumesModal}
+        animationType="slide"
+        transparent={true}
+        onRequestClose={() => setShowVolumesModal(false)}
+      >
+        <View style={styles.modalContainer}>
+          <View style={styles.modalContent}>
+            <Text style={styles.modalTitle}>Volumes Faltantes</Text>
+            <Text style={styles.modalSubtitle}>
+              {totalVolumes - conferidos.length} volumes não conferidos (de um total de {totalVolumes})
+            </Text>
+            <Text style={[
+              styles.situacaoText,
+              conferidos.length === totalVolumes ? styles.situacaoComplete : styles.situacaoDivergencia
+            ]}>
+              Situação: {conferidos.length === totalVolumes ? 'Conferência completa' : 'Conferência com divergência'}
+            </Text>
+            
+            <ScrollView style={styles.volumesList}>
+              {volumes
+                .filter(v => !conferidos.includes(v.IDREV))
+                .map((volume, index) => (
+                  <View key={index} style={styles.volumeItem}>
+                    <Text style={styles.volumeText}>ID: {volume.IDREV}</Text>
+                    <Text style={styles.volumeSubText}>Etiqueta: {volume.SEQETIQUETA}</Text>
+                  </View>
+                ))
+              }
+            </ScrollView>
+            
+            <TouchableOpacity
+              style={[styles.modalButton, styles.confirmModalButton]}
+              onPress={() => setShowVolumesModal(false)}
+            >
+              <Text style={styles.modalButtonText}>Fechar</Text>
+            </TouchableOpacity>
+          </View>
         </View>
-      </View>
-    </Modal>
+      </Modal>
     </ScrollView>
   );
 }
@@ -505,7 +554,7 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: '#f5f5f5',
   },
-   situacaoText: {
+  situacaoText: {
     fontSize: 16,
     fontWeight: 'bold',
     textAlign: 'center',
@@ -518,10 +567,10 @@ const styles = StyleSheet.create({
     color: '#F44336',
   },
   situacaoButtonText: {
-  color: 'white',
-  fontSize: 12,
-  marginTop: 4,
-},
+    color: 'white',
+    fontSize: 12,
+    marginTop: 4,
+  },
   header: {
     flexDirection: 'row',
     justifyContent: 'space-between',
@@ -690,7 +739,6 @@ const styles = StyleSheet.create({
   },
   volumesList: {
     marginBottom: 10,
-    
     maxHeight: '55%',
   },
   volumeItem: {
@@ -726,7 +774,6 @@ const styles = StyleSheet.create({
   },
   modalButtonText: {
     color: 'white',
-    
     fontWeight: 'bold',
   },
 });
