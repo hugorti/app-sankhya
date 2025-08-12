@@ -11,7 +11,7 @@ export type RootStackParamList = {
     ordemCarga: number;
     nunota: string;
   };
-  estoque: undefined;
+  almoxarife: undefined;
   romaneio: undefined;
 };
 

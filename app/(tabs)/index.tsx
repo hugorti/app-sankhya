@@ -61,7 +61,7 @@ export default function HomeScreen() {
         <View style={styles.row}>
           <TouchableOpacity 
             style={[styles.card, { backgroundColor: '#4CAF50' }]}
-            onPress={() => navigateTo('estoque')}
+            onPress={() => navigateTo('almoxarife')}
           >
             <Ionicons name="archive-outline" size={48} color="white" />
             <Text style={styles.cardText}>Almoxarife</Text>

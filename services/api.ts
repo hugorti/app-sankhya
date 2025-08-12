@@ -9,7 +9,7 @@ const SERVER_URL_KEY = 'saved_server_url';
 const DEFAULT_IP = '';
 const DEFAULT_PORT = '8180';
 const DEFAULT_URL = `${DEFAULT_IP}:${DEFAULT_PORT}`;
-const INACTIVITY_TIMEOUT = 1 * 60 * 1000; // 2 minutos em milissegundos
+const INACTIVITY_TIMEOUT = 3 * 60 * 1000; // 3 minutos em milissegundos
 
 const parser = new XMLParser({
   attributeNamePrefix: '@_',
@@ -351,6 +351,7 @@ export const logout = async (isAutoLogout = false): Promise<void> => {
     await AsyncStorage.removeItem('sankhya_session');
   }
 };
+
 export const queryJson = async (serviceName: string, requestBody: object): Promise<any> => {
   try {
     const response = await api.post(
@@ -435,42 +436,257 @@ export const salvarConferenciaAPI = async (data: {
   }
 };
 
-export const deletarConferenciaAPI = async (nunota: number): Promise<any> => {
-  const xmlRequest = `<?xml version="1.0" encoding="ISO-8859-1"?>
-<serviceRequest serviceName="CRUDServiceProvider.deleteRecord">
-  <requestBody>
-    <dataSet>
-      <rootEntity>AD_EXPEDICAODASH</rootEntity>
-      <where>
-        <condition expression="NUNOTA = ${nunota}"/>
-      </where>
-    </dataSet>
-  </requestBody>
-</serviceRequest>`;
+export const alterarEstoqueEndereco = async (data: {
+  CODEMP: number;
+  CODPROD: number;
+  CODLOCAL: number;
+  CODEND: string; // Alterado para string pois parece ser um código com pontos
+  ESTOQUE: number;
+  CODVOL: string;
+  ESTOQUEVOLPAD: number;
+}): Promise<any> => {
+  const requestBody = {
+    serviceName: "CRUDServiceProvider.saveRecord",
+    requestBody: {
+      dataSet: {
+        rootEntity: "EstoqueEndereco",
+        includePresentationFields: "N",
+        dataRow: {
+          localFields: {
+            ESTOQUE: { "$": data.ESTOQUE },
+            ESTOQUEVOLPAD: { "$": data.ESTOQUEVOLPAD }
+          },
+          key: {
+            CODEMP: { "$": data.CODEMP },
+            CODPROD: { "$": data.CODPROD },
+            CODLOCAL: { "$": data.CODLOCAL },
+            CONTROLE: { "$": null },
+            CODEND: { "$": data.CODEND }, // Já será enviado como string
+            CODVOL: { "$": data.CODVOL }, // Adicionado
+            CODPARC: { "$": 0 }
+          }
+        },
+        entity: {
+          fieldset: {
+            list: "CODEMP,CODPROD,ESTOQUE,ESTOQUEVOLPAD"
+          }
+        }
+      }
+    }
+  };
 
   try {
     const response = await api.post(
-      'services.sbr?serviceName=CRUDServiceProvider.removeRecord',
-      xmlRequest,
-      { responseType: 'text', transformResponse: [data => data] }
+      'mge/service.sbr?serviceName=CRUDServiceProvider.saveRecord&outputType=json',
+      requestBody,
+      { headers: { 'Content-Type': 'application/json' } }
     );
 
-    const result = parser.parse(response.data);
-    
-    if (!result.serviceResponse || result.serviceResponse['@_status'] !== "1") {
-      throw new Error(result.serviceResponse?.statusMessage || 'Erro ao deletar');
+    if (response.data.status !== "1") {
+      throw new Error(response.data.statusMessage || 'Erro ao alterar estoque');
     }
 
-    return result.serviceResponse.responseBody;
+    return response.data.responseBody;
   } catch (error) {
-    console.error('Delete conference error:', error);
-    throw new Error(
-      axios.isAxiosError(error)
-        ? 'Erro de conexão com o servidor'
-        : error instanceof Error
-          ? error.message
-          : 'Erro desconhecido ao deletar'
+    console.error('Error updating stock:', error);
+    throw error; // Rejoga o erro para ser tratado no componente
+  }
+};
+
+// Adicione esta função auxiliar para buscar o IDIATV da operação de EMBALAGEM
+const buscarIdiAtvEmbalagem = async (idiproc: number): Promise<number | null> => {
+  try {
+    const sql = `
+      SELECT ATV.IDIATV
+      FROM TPRIATV ATV
+      JOIN TPREFX FX ON FX.IDEFX = ATV.IDEFX
+      WHERE ATV.IDIPROC = ${idiproc} AND FX.DESCRICAO = 'EMBALAGEM'
+    `;
+    
+    const result = await queryJson('DbExplorerSP.executeQuery', { sql });
+    return result.rows.length > 0 ? result.rows[0][0] : null;
+  } catch (error) {
+    console.error('Erro ao buscar IDIATV de embalagem:', error);
+    return null;
+  }
+};
+
+export const iniciarSeparacao = async (data: {
+  IDIPROC: number;
+  // IDEFX: number;
+}): Promise<any> => {
+  // Buscar o IDIATV da operação de EMBALAGEM
+  const idiAtv = await buscarIdiAtvEmbalagem(data.IDIPROC);
+  
+  if (!idiAtv) {
+    throw new Error('Não foi encontrada atividade de EMBALAGEM para esta OP');
+  }
+
+  // Formatar data e hora atual no formato DD/MM/YYYY HH:MM
+  const now = new Date();
+  const day = String(now.getDate()).padStart(2, '0');
+  const month = String(now.getMonth() + 1).padStart(2, '0');
+  const year = now.getFullYear();
+  const hours = String(now.getHours()).padStart(2, '0');
+  const minutes = String(now.getMinutes()).padStart(2, '0');
+  const dataHora = `${day}/${month}/${year} ${hours}:${minutes}`;
+
+  const requestBody = {
+    serviceName: "CRUDServiceProvider.saveRecord",
+    requestBody: {
+      dataSet: {
+        rootEntity: "InstanciaAtividade",
+        includePresentationFields: "N",
+        dataRow: {
+          localFields: {
+            IDIPROC: { "$": data.IDIPROC },
+            // IDEFX: { "$": data.IDEFX },
+            DHINICIO: { "$": dataHora }
+          },
+          key: {
+            IDIATV: { "$": idiAtv }
+          }
+        },
+        entity: {
+          fieldset: {
+            list: "IDIPROC, DHINICIO"
+          }
+        }
+      }
+    }
+  };
+
+  try {
+    const response = await api.post(
+      'mge/service.sbr?serviceName=CRUDServiceProvider.saveRecord&outputType=json',
+      requestBody,
+      { headers: { 'Content-Type': 'application/json' } }
     );
+
+    if (response.data.status !== "1") {
+      throw new Error(response.data.statusMessage || 'Erro ao iniciar separação');
+    }
+
+    return response.data.responseBody;
+  } catch (error) {
+    console.error('Error starting separation:', error);
+    throw error;
+  }
+};
+
+export const finalizarSeparacao = async (data: {
+  IDIPROC: number;
+  // IDEFX: number;
+}): Promise<any> => {
+  // Buscar o IDIATV da operação de EMBALAGEM
+  const idiAtv = await buscarIdiAtvEmbalagem(data.IDIPROC);
+  
+  if (!idiAtv) {
+    throw new Error('Não foi encontrada atividade de EMBALAGEM para esta OP');
+  }
+
+  // Formatar data e hora atual no formato DD/MM/YYYY HH:MM
+  const now = new Date();
+  const day = String(now.getDate()).padStart(2, '0');
+  const month = String(now.getMonth() + 1).padStart(2, '0');
+  const year = now.getFullYear();
+  const hours = String(now.getHours()).padStart(2, '0');
+  const minutes = String(now.getMinutes()).padStart(2, '0');
+  const dataHora = `${day}/${month}/${year} ${hours}:${minutes}`;
+
+  const requestBody = {
+    serviceName: "CRUDServiceProvider.saveRecord",
+    requestBody: {
+      dataSet: {
+        rootEntity: "InstanciaAtividade",
+        includePresentationFields: "N",
+        dataRow: {
+          localFields: {
+            IDIPROC: { "$": data.IDIPROC },
+            // IDEFX: { "$": data.IDEFX },
+            DHFINAL: { "$": dataHora }
+          },
+          key: {
+            IDIATV: { "$": idiAtv }
+          }
+        },
+        entity: {
+          fieldset: {
+            list: "IDIPROC, DHFINAL"
+          }
+        }
+      }
+    }
+  };
+
+  try {
+    const response = await api.post(
+      'mge/service.sbr?serviceName=CRUDServiceProvider.saveRecord&outputType=json',
+      requestBody,
+      { headers: { 'Content-Type': 'application/json' } }
+    );
+
+    if (response.data.status !== "1") {
+      throw new Error(response.data.statusMessage || 'Erro ao finalizar separação');
+    }
+
+    return response.data.responseBody;
+  } catch (error) {
+    console.error('Error finishing separation:', error);
+    throw error;
+  }
+};
+
+export const registrarRetiradaAlmoxarifado = async (data: {
+  CODPROD: number;
+  DESCRPROD: string;
+  ESTOQUE: string;
+  QTDSEPARADA: string;
+  USUARIO: string;
+  UNIDADE: string;
+  OP: number;
+}): Promise<any> => {
+  const requestBody = {
+    serviceName: "CRUDServiceProvider.saveRecord",
+    requestBody: {
+      dataSet: {
+        rootEntity: "AD_ALMOXARIFEWMS",
+        includePresentationFields: "N",
+        dataRow: {
+          localFields: {
+            CODPROD: { "$": data.CODPROD },
+            DESCRPROD: { "$": data.DESCRPROD },
+            ESTOQUE: { "$": data.ESTOQUE },
+            QTDSEPARADA: { "$": data.QTDSEPARADA },
+            USUARIO: { "$": data.USUARIO },
+            UNIDADE: { "$": data.UNIDADE },
+            OP: { "$": data.OP }
+          }
+        },
+        entity: {
+          fieldset: {
+            list: "CODPROD,DESCRPROD,ESTOQUE,QTDSEPARADA,USUARIO,OP,UNIDADE"
+          }
+        }
+      }
+    }
+  };
+
+  try {
+    const response = await api.post(
+      'mge/service.sbr?serviceName=CRUDServiceProvider.saveRecord&outputType=json',
+      requestBody,
+      { headers: { 'Content-Type': 'application/json' } }
+    );
+
+    if (response.data.status !== "1") {
+      throw new Error(response.data.statusMessage || 'Erro ao registrar retirada');
+    }
+
+    return response.data.responseBody;
+  } catch (error) {
+    console.error('Error registering withdrawal:', error);
+    throw error;
   }
 };
 

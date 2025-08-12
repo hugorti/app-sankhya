@@ -99,7 +99,7 @@ export default function RootLayout() {
       />
 
       <Stack.Screen 
-        name="estoque" 
+        name="almoxarife" 
         options={{
           headerShown: false,
           title: 'Almoxarife',
