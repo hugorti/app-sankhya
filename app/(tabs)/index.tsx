@@ -1,13 +1,38 @@
 // app/(tabs)/index.tsx
-import { View, Text, StyleSheet, TouchableOpacity, Alert } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, Alert, ActivityIndicator } from 'react-native';
 import { useRouter } from 'expo-router';
 import { useSession } from '../../hooks/useSession';
 import { Ionicons } from '@expo/vector-icons';
 import { RootStackParamList } from '@/types/navigation';
+import { useEffect, useState } from 'react';
+import { queryJson } from '@/services/api';
 
 export default function HomeScreen() {
   const router = useRouter();
   const { session, logout } = useSession();
+  const [userGroup, setUserGroup] = useState<number | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    const fetchUserGroup = async () => {
+      if (!session?.username) return;
+      
+      try {
+        const result = await queryJson('DbExplorerSP.executeQuery', {
+          sql: `SELECT CODGRUPO FROM TSIUSU WHERE NOMEUSU = '${session.username}'`
+        });
+        
+        if (result.rows.length > 0) {
+          setUserGroup(result.rows[0][0]);
+        }
+      } catch (error) {
+      } finally {
+        setLoading(false);
+      }
+    };
+    
+    fetchUserGroup();
+  }, [session]);
 
   const handleLogout = async () => {
     try {
@@ -17,12 +42,40 @@ export default function HomeScreen() {
     }
   };
 
+  const hasAlmoxarifePermission = () => {
+    if (!userGroup) return false;
+    const allowedGroups = [1, 7, 9, 17, 18, 21, 23];
+    return allowedGroups.includes(userGroup);
+  };
+
+  const hasExpedicaoPermission = () => {
+    if (!userGroup) return false;
+    const allowedGroups = [1, 6];
+    return allowedGroups.includes(userGroup);
+  };
+
   const navigateTo = (screen: keyof RootStackParamList) => {
+    // Verifica acesso para Expedição e Conferência
+    if ((screen === 'expedicao' || screen === 'conferenciaList') && !hasExpedicaoPermission()) {
+      Alert.alert('Acesso negado', 'Somente usuários autorizados podem acessar esta funcionalidade');
+      return;
+    }
+    
+    // Verifica acesso para Almoxarife e Romaneio
+    if ((screen === 'almoxarife' || screen === 'romaneio') && !hasAlmoxarifePermission()) {
+      Alert.alert('Acesso negado', 'Somente usuários autorizados podem acessar esta funcionalidade');
+      return;
+    }
+    
     router.push(`/${screen}`);
   };
 
-  if (!session) {
-    return null;
+  if (!session || loading) {
+    return (
+      <View style={styles.container}>
+        <ActivityIndicator size="large" />
+      </View>
+    );
   }
 
   return (

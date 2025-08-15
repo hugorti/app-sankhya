@@ -448,6 +448,12 @@ export default function AlmoxarifadoScreen() {
     }
   };
 
+  // Função para verificar se todos os itens foram separados
+  const todosItensSeparados = () => {
+    if (dados.length === 0) return false;
+    return dados.every(item => item.separado);
+  };
+
   return (
     <SafeAreaView style={styles.container}>
       <View style={styles.header}>
@@ -495,13 +501,17 @@ export default function AlmoxarifadoScreen() {
             {/* Mostrar botão Finalizar apenas se DHINICIO não for null e DHFINAL for null */}
             {separacaoIniciada && !separacaoFinalizada && (
               <TouchableOpacity 
-                style={styles.finalizarButton} 
+                style={[
+                  styles.finalizarButton,
+                  !todosItensSeparados() && styles.actionButtonDisabled
+                ]} 
                 onPress={handleFinalizarSeparacao} 
-                disabled={loading}
+                disabled={loading || !todosItensSeparados()}
               >
                 <Ionicons name="checkmark" size={20} color="white" />
                 <Text style={styles.actionButtonText}>
-                  {loading ? 'Processando...' : 'Finalizar Separação'}
+                  {loading ? 'Processando...' : 
+                   todosItensSeparados() ? 'Finalizar Separação' : 'Separe todos os itens'}
                 </Text>
               </TouchableOpacity>
             )}
