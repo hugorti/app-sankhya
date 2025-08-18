@@ -125,7 +125,7 @@ export default function HomeScreen() {
             onPress={() => navigateTo('romaneio')}
           >
             <Ionicons name="document-text-outline" size={48} color="white" />
-            <Text style={styles.cardText}>Romaneio</Text>
+            <Text style={styles.cardText}>Separação</Text>
           </TouchableOpacity>
         </View>
       </View>

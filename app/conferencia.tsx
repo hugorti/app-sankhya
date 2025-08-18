@@ -1,11 +1,12 @@
 import { useState, useEffect } from 'react';
 import { View, Text, StyleSheet, TextInput, TouchableOpacity, Alert, ActivityIndicator, ScrollView, Modal } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import { queryJson, salvarConferenciaAPI } from '@/services/api';
+import { queryJson, registerUserActivity, salvarConferenciaAPI } from '@/services/api';
 import { useSession } from '@/hooks/useSession';
 import { Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Picker } from '@react-native-picker/picker';
+import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 
 interface Volume {
   IDREV: number;
@@ -70,6 +71,11 @@ export default function ConferenciaScreen() {
     { label: 'Não bipando volumes', value: 'Não bipando volumes' },
     { label: 'Troca de turno', value: 'Troca de turno' }
   ];
+
+  const tapGesture = Gesture.Tap()
+  .onStart(() => {
+    registerUserActivity();
+  });
 
   useEffect(() => {
     const carregarDados = async () => {
@@ -333,213 +339,218 @@ export default function ConferenciaScreen() {
   }
 
   return (
-    <ScrollView 
-      style={styles.scrollContainer}
-      contentContainerStyle={styles.scrollContent}
-      keyboardShouldPersistTaps="handled"
-    >
-      {/* Cabeçalho */}
-      <View style={styles.header}>
-        <TouchableOpacity onPress={() => {
-          saveConferenciaData({ volumes, conferidos, ultimoConferido });
-          router.back();
-        }}>
-          <Ionicons name="arrow-back" size={24} color="white" />
-        </TouchableOpacity>
-        <Text style={styles.headerTitle}>Conferência de Volumes</Text>
-        <View style={{ width: 24 }} />
-      </View>
-
-      {/* Informações da carga */}
-      <View style={styles.infoContainer}>
-        <Text style={styles.infoText}>Ordem: {ordemCarga}</Text>
-        <Text style={styles.infoText}>Nota: {nunota}</Text>
-        <Text style={styles.infoText}>Separação: {nuseparacao}</Text>
-        <Text style={styles.infoText}>Usuário: {session?.username || 'Não identificado'}</Text>
-        <Text style={styles.infoText}>
-          Progresso: {conferidos.length}/{totalVolumes} volumes
-        </Text>
-      </View>
-
-      {/* Progresso */}
-      <View style={styles.progressContainer}>
-        <Text style={styles.progressText}>
-          {conferidos.length}/{totalVolumes} volumes conferidos
-        </Text>
-        <View style={styles.progressBar}>
-          <View style={[
-            styles.progressFill,
-            { width: `${(conferidos.length / totalVolumes) * 100}%` }
-          ]} />
+    <GestureDetector gesture={tapGesture}>
+      <ScrollView 
+        style={styles.scrollContainer}
+        contentContainerStyle={styles.scrollContent}
+        keyboardShouldPersistTaps="handled"
+      >
+        {/* Cabeçalho */}
+        <View style={styles.header}>
+          <TouchableOpacity onPress={() => {
+            saveConferenciaData({ volumes, conferidos, ultimoConferido });
+            router.back();
+          }}>
+            <Ionicons name="arrow-back" size={24} color="white" />
+          </TouchableOpacity>
+          <Text style={styles.headerTitle}>Conferência de Volumes</Text>
+          <View style={{ width: 24 }} />
         </View>
-      </View>
 
-      {/* Último conferido */}
-      {ultimoConferido && (
-        <View style={styles.lastChecked}>
-          <Text style={styles.lastCheckedText}>Último conferido:</Text>
-          <Text style={styles.lastCheckedId}>ID: {ultimoConferido.IDREV}</Text>
-          <Text style={styles.lastCheckedSeq}>Etiqueta: {ultimoConferido.SEQETIQUETA}</Text>
-        </View>
-      )}
-
-      {/* Input para conferência */}
-      <View style={styles.inputContainer}>
-        <TextInput
-          style={styles.input}
-          placeholder="Digite o número da etiqueta"
-          placeholderTextColor="#999"
-          keyboardType="numeric"
-          value={inputValue}
-          onChangeText={setInputValue}
-          autoFocus
-          autoCorrect={false}
-          autoCapitalize="none"
-          maxLength={7}
-        />
-        <TouchableOpacity
-          style={styles.confirmButton} 
-          onPress={handleConferir}
-          disabled={!inputValue}
-        >
-          <Ionicons name="checkmark" size={24} color="white" />
-        </TouchableOpacity>
-      </View>
-
-      {/* Botões de ação */}
-      <View style={styles.footerButtons}>
-        <TouchableOpacity
-          style={[styles.volumesButton, { backgroundColor: '#FFA500' }]}
-          onPress={mostrarVolumesFaltantes}
-        >
-          <Text style={styles.finishButtonText}>Volumes</Text>
-        </TouchableOpacity>
-        
-       <TouchableOpacity
-          style={[
-            styles.finishButton,
-            { 
-              backgroundColor: conferidos.length === totalVolumes ? '#4CAF50' : '#2196F3',
-              opacity: conferidos.length > 0 ? 1 : 0.5 // Desativa visualmente quando zero volumes
-            }
-          ]}
-          onPress={finalizarConferencia}
-          disabled={conferidos.length === 0} // Desativa funcionalmente quando zero volumes
-        >
-          <Text style={styles.finishButtonText}>
-            Finalizar Conferência
+        {/* Informações da carga */}
+        <View style={styles.infoContainer}>
+          <Text style={styles.infoText}>Ordem: {ordemCarga}</Text>
+          <Text style={styles.infoText}>Nota: {nunota}</Text>
+          <Text style={styles.infoText}>Separação: {nuseparacao}</Text>
+          <Text style={styles.infoText}>Usuário: {session?.username || 'Não identificado'}</Text>
+          <Text style={styles.infoText}>
+            Progresso: {conferidos.length}/{totalVolumes} volumes
           </Text>
-        </TouchableOpacity>
-      </View>
+        </View>
 
-      {/* Botão para reiniciar contagem */}
-      <TouchableOpacity
-        style={[styles.volumesButton, { 
-          backgroundColor: '#F44336',
-          marginTop: 8,
-          marginHorizontal: 16
-        }]}
-        onPress={reiniciarConferencia}
-      >
-        <Text style={styles.finishButtonText}>Reiniciar Contagem</Text>
-      </TouchableOpacity>
+        {/* Progresso */}
+        <View style={styles.progressContainer}>
+          <Text style={styles.progressText}>
+            {conferidos.length}/{totalVolumes} volumes conferidos
+          </Text>
+          <View style={styles.progressBar}>
+            <View style={[
+              styles.progressFill,
+              { width: `${(conferidos.length / totalVolumes) * 100}%` }
+            ]} />
+          </View>
+        </View>
 
-      {/* Modal de motivo */}
-      <Modal
-        visible={showMotivoModal}
-        animationType="slide"
-        transparent={true}
-        onRequestClose={() => setShowMotivoModal(false)}
-      >
-        <View style={styles.modalContainer}>
-          <View style={styles.modalContent}>
-            <Text style={styles.modalTitle}>Selecione o motivo</Text>
-            <Text style={styles.modalSubtitle}>
-              {totalVolumes - conferidos.length} volumes não foram conferidos
+        {/* Último conferido */}
+        {ultimoConferido && (
+          <View style={styles.lastChecked}>
+            <Text style={styles.lastCheckedText}>Último conferido:</Text>
+            <Text style={styles.lastCheckedId}>ID: {ultimoConferido.IDREV}</Text>
+            <Text style={styles.lastCheckedSeq}>Etiqueta: {ultimoConferido.SEQETIQUETA}</Text>
+          </View>
+        )}
+
+        {/* Input para conferência */}
+        <View style={styles.inputContainer}>
+          <TextInput
+            style={styles.input}
+            placeholder="Digite o número da etiqueta"
+            placeholderTextColor="#999"
+            keyboardType="numeric"
+            value={inputValue}
+            onChangeText={(text) => {
+                setInputValue(text);
+                registerUserActivity();
+              }}
+            autoFocus
+            autoCorrect={false}
+            autoCapitalize="none"
+            maxLength={7}
+          />
+          <TouchableOpacity
+            style={styles.confirmButton} 
+            onPress={handleConferir}
+            disabled={!inputValue}
+          >
+            <Ionicons name="checkmark" size={24} color="white" />
+          </TouchableOpacity>
+        </View>
+
+        {/* Botões de ação */}
+        <View style={styles.footerButtons}>
+          <TouchableOpacity
+            style={[styles.volumesButton, { backgroundColor: '#FFA500' }]}
+            onPress={mostrarVolumesFaltantes}
+          >
+            <Text style={styles.finishButtonText}>Volumes</Text>
+          </TouchableOpacity>
+          
+        <TouchableOpacity
+            style={[
+              styles.finishButton,
+              { 
+                backgroundColor: conferidos.length === totalVolumes ? '#4CAF50' : '#2196F3',
+                opacity: conferidos.length > 0 ? 1 : 0.5 // Desativa visualmente quando zero volumes
+              }
+            ]}
+            onPress={finalizarConferencia}
+            disabled={conferidos.length === 0} // Desativa funcionalmente quando zero volumes
+          >
+            <Text style={styles.finishButtonText}>
+              Finalizar Conferência
             </Text>
-            
-            <View style={styles.pickerContainer}>
-              <Picker
-                selectedValue={motivo}
-                onValueChange={(itemValue) => setMotivo(itemValue)}
-                style={styles.picker}
-                dropdownIconColor="#333"
-              >
-                {opcoesMotivo.map((opcao, index) => (
-                  <Picker.Item 
-                    key={index} 
-                    label={opcao.label} 
-                    value={opcao.value} 
-                  />
-                ))}
-              </Picker>
+          </TouchableOpacity>
+        </View>
+
+        {/* Botão para reiniciar contagem */}
+        <TouchableOpacity
+          style={[styles.volumesButton, { 
+            backgroundColor: '#F44336',
+            marginTop: 8,
+            marginHorizontal: 16
+          }]}
+          onPress={reiniciarConferencia}
+        >
+          <Text style={styles.finishButtonText}>Reiniciar Contagem</Text>
+        </TouchableOpacity>
+
+        {/* Modal de motivo */}
+        <Modal
+          visible={showMotivoModal}
+          animationType="slide"
+          transparent={true}
+          onRequestClose={() => setShowMotivoModal(false)}
+        >
+          <View style={styles.modalContainer}>
+            <View style={styles.modalContent}>
+              <Text style={styles.modalTitle}>Selecione o motivo</Text>
+              <Text style={styles.modalSubtitle}>
+                {totalVolumes - conferidos.length} volumes não foram conferidos
+              </Text>
+              
+              <View style={styles.pickerContainer}>
+                <Picker
+                  selectedValue={motivo}
+                  onValueChange={(itemValue) => setMotivo(itemValue)}
+                  style={styles.picker}
+                  dropdownIconColor="#333"
+                >
+                  {opcoesMotivo.map((opcao, index) => (
+                    <Picker.Item 
+                      key={index} 
+                      label={opcao.label} 
+                      value={opcao.value} 
+                    />
+                  ))}
+                </Picker>
+              </View>
+              
+              <View style={styles.modalButtons}>
+                <TouchableOpacity
+                  style={[styles.modalButton, styles.cancelButton]}
+                  onPress={() => {
+                    setMotivo('');
+                    setShowMotivoModal(false);
+                  }}
+                >
+                  <Text style={styles.modalButtonText}>Cancelar</Text>
+                </TouchableOpacity>
+                
+                <TouchableOpacity
+                  style={[styles.modalButton, styles.confirmModalButton]}
+                  onPress={confirmarFinalizacao}
+                  disabled={!motivo}
+                >
+                  <Text style={styles.modalButtonText}>Confirmar</Text>
+                </TouchableOpacity>
+              </View>
             </View>
-            
-            <View style={styles.modalButtons}>
-              <TouchableOpacity
-                style={[styles.modalButton, styles.cancelButton]}
-                onPress={() => {
-                  setMotivo('');
-                  setShowMotivoModal(false);
-                }}
-              >
-                <Text style={styles.modalButtonText}>Cancelar</Text>
-              </TouchableOpacity>
+          </View>
+        </Modal>
+
+        {/* Modal de volumes faltantes */}
+        <Modal
+          visible={showVolumesModal}
+          animationType="slide"
+          transparent={true}
+          onRequestClose={() => setShowVolumesModal(false)}
+        >
+          <View style={styles.modalContainer}>
+            <View style={styles.modalContent}>
+              <Text style={styles.modalTitle}>Volumes Faltantes</Text>
+              <Text style={styles.modalSubtitle}>
+                {totalVolumes - conferidos.length} volumes não conferidos (de um total de {totalVolumes})
+              </Text>
+              <Text style={[
+                styles.situacaoText,
+                conferidos.length === totalVolumes ? styles.situacaoComplete : styles.situacaoDivergencia
+              ]}>
+                Situação: {conferidos.length === totalVolumes ? 'Conferência completa' : 'Conferência com divergência'}
+              </Text>
+              
+              <ScrollView style={styles.volumesList}>
+                {volumes
+                  .filter(v => !conferidos.includes(v.IDREV))
+                  .map((volume, index) => (
+                    <View key={index} style={styles.volumeItem}>
+                      <Text style={styles.volumeText}>ID: {volume.IDREV}</Text>
+                      <Text style={styles.volumeSubText}>Etiqueta: {volume.SEQETIQUETA}</Text>
+                    </View>
+                  ))
+                }
+              </ScrollView>
               
               <TouchableOpacity
                 style={[styles.modalButton, styles.confirmModalButton]}
-                onPress={confirmarFinalizacao}
-                disabled={!motivo}
+                onPress={() => setShowVolumesModal(false)}
               >
-                <Text style={styles.modalButtonText}>Confirmar</Text>
+                <Text style={styles.modalButtonText}>Fechar</Text>
               </TouchableOpacity>
             </View>
           </View>
-        </View>
-      </Modal>
-
-      {/* Modal de volumes faltantes */}
-      <Modal
-        visible={showVolumesModal}
-        animationType="slide"
-        transparent={true}
-        onRequestClose={() => setShowVolumesModal(false)}
-      >
-        <View style={styles.modalContainer}>
-          <View style={styles.modalContent}>
-            <Text style={styles.modalTitle}>Volumes Faltantes</Text>
-            <Text style={styles.modalSubtitle}>
-              {totalVolumes - conferidos.length} volumes não conferidos (de um total de {totalVolumes})
-            </Text>
-            <Text style={[
-              styles.situacaoText,
-              conferidos.length === totalVolumes ? styles.situacaoComplete : styles.situacaoDivergencia
-            ]}>
-              Situação: {conferidos.length === totalVolumes ? 'Conferência completa' : 'Conferência com divergência'}
-            </Text>
-            
-            <ScrollView style={styles.volumesList}>
-              {volumes
-                .filter(v => !conferidos.includes(v.IDREV))
-                .map((volume, index) => (
-                  <View key={index} style={styles.volumeItem}>
-                    <Text style={styles.volumeText}>ID: {volume.IDREV}</Text>
-                    <Text style={styles.volumeSubText}>Etiqueta: {volume.SEQETIQUETA}</Text>
-                  </View>
-                ))
-              }
-            </ScrollView>
-            
-            <TouchableOpacity
-              style={[styles.modalButton, styles.confirmModalButton]}
-              onPress={() => setShowVolumesModal(false)}
-            >
-              <Text style={styles.modalButtonText}>Fechar</Text>
-            </TouchableOpacity>
-          </View>
-        </View>
-      </Modal>
-    </ScrollView>
+        </Modal>
+      </ScrollView>
+    </GestureDetector>
   );
 }
 

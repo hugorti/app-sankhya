@@ -1,9 +1,10 @@
-import { View, Text, StyleSheet, ActivityIndicator, TextInput, TouchableOpacity, ScrollView, SafeAreaView } from 'react-native';
-import { useState } from 'react';
+import { InteractionManager, DeviceEventEmitter, View, Text, StyleSheet, ActivityIndicator, TextInput, TouchableOpacity, ScrollView, SafeAreaView } from 'react-native';
+import React, { useState } from 'react';
 import { useRouter } from 'expo-router';
-import { queryJson } from '@/services/api';
+import { queryJson, registerUserActivity } from '@/services/api';
 import { useSession } from '@/hooks/useSession';
 import { Ionicons } from '@expo/vector-icons';
+import { useFocusEffect } from '@react-navigation/native';
 
 interface DadosSeparacao {
   SEQETIQUETA: string;
@@ -27,6 +28,32 @@ export default function ExpedicaoScreen() {
   const [nunota, setNunota] = useState('');
   const [mostrarDados, setMostrarDados] = useState(true);
   const [conferidos, setConferidos] = useState<number[]>([]);
+
+  useFocusEffect(
+  React.useCallback(() => {
+    // Registra atividade quando a tela recebe foco
+    registerUserActivity();
+    
+    // Configura listeners para interações do usuário
+    const interactionHandlers = [
+      DeviceEventEmitter.addListener('touchStart', registerUserActivity),
+      DeviceEventEmitter.addListener('touchMove', registerUserActivity),
+      DeviceEventEmitter.addListener('scroll', registerUserActivity),
+    ];
+    
+    // Alternativa para componentes que não emitem eventos globais
+    const interactionSubscription = InteractionManager.runAfterInteractions(() => {
+      // Código que será executado após interações
+      registerUserActivity();
+    });
+    
+    return () => {
+      // Limpa todos os listeners ao desmontar
+      interactionHandlers.forEach(handler => handler.remove());
+      interactionSubscription?.cancel();
+    };
+  }, [])
+);
 
   const buscarDados = async () => {
     if (!session?.jsessionid || !ordemCarga.trim() || !nunota.trim()) return;
@@ -191,7 +218,10 @@ export default function ExpedicaoScreen() {
           
           <TouchableOpacity 
             style={styles.searchButton}
-            onPress={buscarDados}
+            onPress={() => {
+              registerUserActivity();
+              buscarDados();
+            }}
             disabled={loading || !ordemCarga || !nunota}
           >
             <Ionicons name="search" size={24} color="white" />

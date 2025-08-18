@@ -9,7 +9,7 @@ const SERVER_URL_KEY = 'saved_server_url';
 const DEFAULT_IP = '';
 const DEFAULT_PORT = '8180';
 const DEFAULT_URL = `${DEFAULT_IP}:${DEFAULT_PORT}`;
-const INACTIVITY_TIMEOUT = 5 * 60 * 1000; // 3 minutos em milissegundos
+const INACTIVITY_TIMEOUT = 5 * 60 * 1000; // 5 minutos em milissegundos
 
 const parser = new XMLParser({
   attributeNamePrefix: '@_',
@@ -72,6 +72,11 @@ export const setupInactivityListener = (callback: () => Promise<void>) => {
     }
   });
 
+  resetInactivityTimer();
+};
+
+export const registerUserActivity = () => {
+  lastActivityTime = Date.now();
   resetInactivityTimer();
 };
 

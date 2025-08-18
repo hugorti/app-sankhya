@@ -1,4 +1,4 @@
-// app/_layout.tsx
+import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { Stack, useRouter } from 'expo-router';
 import { useSession } from '../hooks/useSession';
 import { ActivityIndicator, View } from 'react-native';
@@ -45,78 +45,80 @@ export default function RootLayout() {
   }
 
   return (
-    <Stack>
-      {/* Authentication Screens */}
-      <Stack.Screen 
-        name="login" 
-        options={{ 
-          title: 'Login Sankhya',
-          headerShown: false,
-          animation: 'fade',
-          gestureEnabled: false // Prevent swipe back on auth screens
-        }} 
-      />
+    <GestureHandlerRootView style={{ flex: 1 }}>
+      <Stack>
+        {/* Authentication Screens */}
+        <Stack.Screen 
+          name="login" 
+          options={{ 
+            title: 'Login Sankhya',
+            headerShown: false,
+            animation: 'fade',
+            gestureEnabled: false
+          }} 
+        />
 
-      {/* Main App Tabs */}
-      <Stack.Screen 
-        name="(tabs)" 
-        options={{
-          headerShown: false,
-          animation: 'fade',
-          gestureEnabled: false // Prevent swipe back to auth
-        }} 
-      />
+        {/* Main App Tabs */}
+        <Stack.Screen 
+          name="(tabs)" 
+          options={{
+            headerShown: false,
+            animation: 'fade',
+            gestureEnabled: false
+          }} 
+        />
 
-      {/* Feature Screens */}
-      <Stack.Screen 
-        name="expedicao" 
-        options={{
-          headerShown: false,
-          title: 'Expedição',
-          animation: 'slide_from_right',
-          gestureEnabled: true
-        }} 
-      />
+        {/* Feature Screens */}
+        <Stack.Screen 
+          name="expedicao" 
+          options={{
+            headerShown: false,
+            title: 'Expedição',
+            animation: 'slide_from_right',
+            gestureEnabled: true
+          }} 
+        />
 
-      <Stack.Screen 
-        name="conferencia" 
-        options={{ 
-          headerShown: false,
-          title: 'Conferência',
-          animation: 'slide_from_right',
-          gestureEnabled: true
-        }} 
-      />
+        <Stack.Screen 
+          name="conferencia" 
+          options={{ 
+            headerShown: false,
+            title: 'Conferência',
+            animation: 'slide_from_right',
+            gestureEnabled: true
+          }} 
+        />
 
-      <Stack.Screen 
-        name="conferenciaList" 
-        options={{ 
-          headerShown: false,
-          title: 'Conferências',
-          animation: 'slide_from_right',
-          gestureEnabled: true
-        }} 
-      />
+        <Stack.Screen 
+          name="conferenciaList" 
+          options={{ 
+            headerShown: false,
+            title: 'Conferências',
+            animation: 'slide_from_right',
+            gestureEnabled: true
+          }} 
+        />
 
-      <Stack.Screen 
-        name="almoxarife" 
-        options={{
-          headerShown: false,
-          title: 'Almoxarife',
-          animation: 'slide_from_right',
-          gestureEnabled: true
-        }} 
-      />
+        <Stack.Screen 
+          name="almoxarife" 
+          options={{
+            headerShown: false,
+            title: 'Almoxarife',
+            animation: 'slide_from_right',
+            gestureEnabled: true
+          }} 
+        />
 
-      <Stack.Screen 
-        name="romaneio" 
-        options={{ 
-          headerShown: false,
-          title: 'Romaneio',
-          animation: 'slide_from_right',
-          gestureEnabled: true
-        }} 
-      />
-    </Stack>
+        <Stack.Screen 
+          name="romaneio" 
+          options={{ 
+            headerShown: false,
+            title: 'Romaneio',
+            animation: 'slide_from_right',
+            gestureEnabled: true
+          }} 
+        />
+      </Stack>
+    </GestureHandlerRootView>
   );
 }

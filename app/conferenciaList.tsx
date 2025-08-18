@@ -2,9 +2,10 @@
 import { View, Text, StyleSheet, ActivityIndicator, TextInput, TouchableOpacity, FlatList } from 'react-native';
 import { useState, useEffect } from 'react';
 import { useRouter } from 'expo-router';
-import { queryJson } from '@/services/api';
+import { queryJson, registerUserActivity } from '@/services/api';
 import { useSession } from '@/hooks/useSession';
 import { Ionicons } from '@expo/vector-icons';
+import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 
 interface DadosConferencia {
   ORDEMCARGA: number;
@@ -190,67 +191,74 @@ export default function ConferenciaListaScreen() {
     </TouchableOpacity>
   );
 
+  const tapGesture = Gesture.Tap()
+    .onStart(() => {
+      registerUserActivity();
+    });
+
   return (
-    <View style={styles.container}>
-      <View style={styles.header}>
-        <TouchableOpacity onPress={() => router.back()}>
-          <Ionicons name="arrow-back" size={24} color="white" />
-        </TouchableOpacity>
-        <Text style={styles.headerTitle}>Lista de Conferências</Text>
-        <TouchableOpacity>
-          {/* <Ionicons name="refresh" size={24} color="white" /> */}
-        </TouchableOpacity>
-      </View>
-
-      <View style={styles.searchContainer}>
-        <Ionicons name="search" size={20} color="#999" style={styles.searchIcon} />
-        <TextInput
-          style={styles.searchInput}
-          placeholder="Buscar por pedido ou oc"
-          placeholderTextColor="#999"
-          value={searchTerm}
-          onChangeText={setSearchTerm}
-        />
-        {searchTerm ? (
-          <TouchableOpacity onPress={() => setSearchTerm('')}>
-            <Ionicons name="close-circle" size={20} color="#999" />
+    <GestureDetector gesture={tapGesture}>
+      <View style={styles.container}>
+        <View style={styles.header}>
+          <TouchableOpacity onPress={() => router.back()}>
+            <Ionicons name="arrow-back" size={24} color="white" />
           </TouchableOpacity>
-        ) : null}
-      </View>
-
-      {loading ? (
-        <View style={styles.loadingContainer}>
-          <ActivityIndicator size="large" color="#4CAF50" />
-          <Text style={styles.loadingText}>Carregando conferências...</Text>
-        </View>
-      ) : error ? (
-        <View style={styles.errorContainer}>
-          <Ionicons name="warning" size={24} color="#D32F2F" />
-          <Text style={styles.errorText}>{error}</Text>
-          <TouchableOpacity 
-            style={styles.retryButton}
-            onPress={buscarTodasConferencias}
-          >
-            <Text style={styles.retryButtonText}>Tentar novamente</Text>
+          <Text style={styles.headerTitle}>Lista de Conferências</Text>
+          <TouchableOpacity>
+            {/* <Ionicons name="refresh" size={24} color="white" /> */}
           </TouchableOpacity>
         </View>
-      ) : (
-        <FlatList
-          data={filteredConferencias}
-          renderItem={renderItem}
-          keyExtractor={(item) => `${item.ORDEMCARGA}-${item.NUNOTA}`}
-          contentContainerStyle={styles.listContent}
-          ListEmptyComponent={
-            <View style={styles.emptyContainer}>
-              <Ionicons name="folder-open-outline" size={48} color="#999" />
-              <Text style={styles.emptyText}>Nenhuma conferência encontrada</Text>
-            </View>
-          }
-          refreshing={loading}
-          onRefresh={buscarTodasConferencias}
-        />
-      )}
-    </View>
+
+        <View style={styles.searchContainer}>
+          <Ionicons name="search" size={20} color="#999" style={styles.searchIcon} />
+          <TextInput
+            style={styles.searchInput}
+            placeholder="Buscar por pedido ou oc"
+            placeholderTextColor="#999"
+            value={searchTerm}
+            onChangeText={setSearchTerm}
+          />
+          {searchTerm ? (
+            <TouchableOpacity onPress={() => setSearchTerm('')}>
+              <Ionicons name="close-circle" size={20} color="#999" />
+            </TouchableOpacity>
+          ) : null}
+        </View>
+
+        {loading ? (
+          <View style={styles.loadingContainer}>
+            <ActivityIndicator size="large" color="#4CAF50" />
+            <Text style={styles.loadingText}>Carregando conferências...</Text>
+          </View>
+        ) : error ? (
+          <View style={styles.errorContainer}>
+            <Ionicons name="warning" size={24} color="#D32F2F" />
+            <Text style={styles.errorText}>{error}</Text>
+            <TouchableOpacity 
+              style={styles.retryButton}
+              onPress={buscarTodasConferencias}
+            >
+              <Text style={styles.retryButtonText}>Tentar novamente</Text>
+            </TouchableOpacity>
+          </View>
+        ) : (
+          <FlatList
+            data={filteredConferencias}
+            renderItem={renderItem}
+            keyExtractor={(item) => `${item.ORDEMCARGA}-${item.NUNOTA}`}
+            contentContainerStyle={styles.listContent}
+            ListEmptyComponent={
+              <View style={styles.emptyContainer}>
+                <Ionicons name="folder-open-outline" size={48} color="#999" />
+                <Text style={styles.emptyText}>Nenhuma conferência encontrada</Text>
+              </View>
+            }
+            refreshing={loading}
+            onRefresh={buscarTodasConferencias}
+          />
+        )}
+      </View>
+    </GestureDetector>
   );
 }
 
