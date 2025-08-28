@@ -1,4 +1,4 @@
-package com.yourcompany.sankhyaapp
+package com.hugorodrigues.wmslabotrat
 
 import android.app.Application
 import android.content.res.Configuration

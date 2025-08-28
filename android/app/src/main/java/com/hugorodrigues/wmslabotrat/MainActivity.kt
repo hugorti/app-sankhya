@@ -1,4 +1,4 @@
-package com.yourcompany.sankhyaapp
+package com.hugorodrigues.wmslabotrat
 import expo.modules.splashscreen.SplashScreenManager
 
 import android.os.Build

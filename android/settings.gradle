@@ -31,7 +31,7 @@ extensions.configure(com.facebook.react.ReactSettingsExtension) { ex ->
 }
 expoAutolinking.useExpoModules()
 
-rootProject.name = 'WMS Expedição'
+rootProject.name = 'WMS Labotrat'
 
 expoAutolinking.useExpoVersionCatalog()
 

@@ -505,7 +505,7 @@ const buscarIdiAtvEmbalagem = async (idiproc: number): Promise<number | null> =>
       SELECT ATV.IDIATV
       FROM TPRIATV ATV
       JOIN TPREFX FX ON FX.IDEFX = ATV.IDEFX
-      WHERE ATV.IDIPROC = ${idiproc} AND FX.DESCRICAO = 'EMBALAGEM'
+      WHERE ATV.IDIPROC = ${idiproc} AND FX.DESCRICAO = 'EMBALAGEM' AND ATV.DHACEITE IS NOT NULL
     `;
     
     const result = await queryJson('DbExplorerSP.executeQuery', { sql });

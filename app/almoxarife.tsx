@@ -57,7 +57,7 @@ export default function AlmoxarifadoScreen() {
         SELECT ATV.IDIPROC, ATV.IDIATV, ATV.IDEFX, ATV.DHACEITE, ATV.DHINICIO, ATV.DHFINAL, FX.DESCRICAO
         FROM TPRIATV ATV
         JOIN TPREFX FX ON FX.IDEFX = ATV.IDEFX
-        WHERE ATV.IDIPROC = ${idiproc} AND FX.DESCRICAO = 'EMBALAGEM'
+        WHERE ATV.IDIPROC = ${idiproc} AND FX.DESCRICAO = 'EMBALAGEM' AND ATV.DHACEITE IS NOT NULL
       `;
       
       const result = await queryJson('DbExplorerSP.executeQuery', { sql });
@@ -299,7 +299,7 @@ export default function AlmoxarifadoScreen() {
       setTemAtividadeEmbalagem(temEmbalagem);
       
       if (!temEmbalagem) {
-        setError('Esta OP não está na fase de EMBALAGEM');
+        setError('Esta OP não está na fase de EMBALAGEM ou não foi aceita.');
         return;
       }
 
@@ -405,7 +405,7 @@ export default function AlmoxarifadoScreen() {
         });
         setDados(dadosFormatados);
       } else {
-        setError('Nenhum registro encontrado para a OP informada');
+        setError('Nenhum registro dessa OP em embalagem ou OP inexistente' );
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Erro ao buscar dados');

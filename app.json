@@ -1,11 +1,11 @@
 {
   "expo": {
-    "name": "WMS Expedição",
-    "slug": "WmsExpedicao",
-    "version": "1.1.0",
+    "name": "WMS Labotrat",
+    "slug": "wmslabotrat",
+    "version": "1.0.1",
     "orientation": "portrait",
     "icon": "./assets/images/logo.png",
-    "scheme": "sankhyaapp",
+    "scheme": "wmslabotrat",
     "userInterfaceStyle": "automatic",
     "splash": {
       "image": "./assets/images/logo.png",
@@ -17,7 +17,7 @@
         "foregroundImage": "./assets/images/logo.png",
         "monochromeImage": "./assets/images/logo.png"
       },
-      "package": "com.yourcompany.sankhyaapp",
+      "package": "com.hugorodrigues.wmslabotrat",
       "permissions": [
         "android.permission.INTERNET",
         "android.permission.ACCESS_NETWORK_STATE"
@@ -28,7 +28,7 @@
     },
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "com.yourcompany.sankhyaapp",
+      "bundleIdentifier": "com.hugorodrigues.wmslabotrat",
       "config": {
         "usesNonExemptEncryption": false
       }

@@ -136,7 +136,7 @@ export default function ConferenciaScreen() {
   }, []);
 
   useEffect(() => {
-    if (inputValue.length === 7) {
+    if (inputValue.length === 7 && conferidos.length < totalVolumes) {
       handleConferir();
     }
   }, [inputValue]);
@@ -164,6 +164,13 @@ export default function ConferenciaScreen() {
   };
 
   const handleConferir = () => {
+    // Verifica se já atingiu o limite máximo
+    if (conferidos.length >= totalVolumes) {
+      Alert.alert('Limite atingido', 'Todos os volumes já foram conferidos!');
+      setInputValue('');
+      return;
+    }
+
     const id = parseInt(inputValue);
     if (isNaN(id)) {
       Alert.alert('Valor inválido', 'Digite um número válido');
@@ -195,9 +202,9 @@ export default function ConferenciaScreen() {
     
     setInputValue('');
     
-    // Confirmação automática por etiqueta
+    // Confirmação automática por etiqueta - também precisa verificar o limite
     const volumePorEtiqueta = volumes.find(v => v.SEQETIQUETA.toString() === inputValue);
-    if (volumePorEtiqueta && volumePorEtiqueta.IDREV !== id) {
+    if (volumePorEtiqueta && volumePorEtiqueta.IDREV !== id && conferidos.length < totalVolumes - 1) {
       const novosConferidosComEtiqueta = [...novosConferidos, volumePorEtiqueta.IDREV];
       setConferidos(novosConferidosComEtiqueta);
       setUltimoConferido(volumePorEtiqueta);
@@ -393,24 +400,30 @@ export default function ConferenciaScreen() {
         {/* Input para conferência */}
         <View style={styles.inputContainer}>
           <TextInput
-            style={styles.input}
+            style={[styles.input, conferidos.length >= totalVolumes && styles.disabledInput]}
             placeholder="Digite o número da etiqueta"
             placeholderTextColor="#999"
             keyboardType="numeric"
             value={inputValue}
             onChangeText={(text) => {
-                setInputValue(text);
-                registerUserActivity();
+                if (conferidos.length < totalVolumes) {
+                  setInputValue(text);
+                  registerUserActivity();
+                }
               }}
-            autoFocus
+            autoFocus={conferidos.length < totalVolumes}
             autoCorrect={false}
             autoCapitalize="none"
             maxLength={7}
+            editable={conferidos.length < totalVolumes}
           />
           <TouchableOpacity
-            style={styles.confirmButton} 
+            style={[
+              styles.confirmButton,
+              (!inputValue || conferidos.length >= totalVolumes) && styles.disabledButton
+            ]} 
             onPress={handleConferir}
-            disabled={!inputValue}
+            disabled={!inputValue || conferidos.length >= totalVolumes}
           >
             <Ionicons name="checkmark" size={24} color="white" />
           </TouchableOpacity>
@@ -674,6 +687,10 @@ const styles = StyleSheet.create({
     borderColor: '#ddd',
     fontSize: 16,
   },
+  disabledInput: {
+    backgroundColor: '#f0f0f0',
+    color: '#999',
+  },
   confirmButton: {
     backgroundColor: '#4CAF50',
     width: 60,
@@ -681,6 +698,9 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
     marginLeft: 8,
+  },
+  disabledButton: {
+    backgroundColor: '#cccccc',
   },
   footerButtons: {
     flexDirection: 'row',
