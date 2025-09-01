@@ -1,8 +1,8 @@
 // app/almoxarifado.tsx
 import { View, Text, StyleSheet, ActivityIndicator, TextInput, TouchableOpacity, ScrollView, SafeAreaView, Modal, Alert } from 'react-native';
-import { useState } from 'react';
+import { useState, useEffect } from 'react'; // Adicionei o useEffect
 import { useRouter } from 'expo-router';
-import { queryJson, registrarRetiradaAlmoxarifado, iniciarSeparacao, finalizarSeparacao } from '@/services/api';
+import { queryJson, registrarRetiradaAlmoxarifado, iniciarSeparacao, finalizarSeparacao, criarNotaFiscal, adicionarItemNotaFiscal } from '@/services/api';
 import { useSession } from '@/hooks/useSession';
 import { Ionicons } from '@expo/vector-icons';
 import { alterarEstoqueEndereco } from '@/services/api';
@@ -32,6 +32,14 @@ interface DadosAlmoxarifado {
   separado?: DadosSeparacao;
 }
 
+// Nova interface para as OPs abertas
+interface OPAberta {
+  IDIPROC: number;
+  REFERENCIA: string;
+  PRODUTOPA: string;
+  LOTE: string;
+}
+
 export default function AlmoxarifadoScreen() {
   const { session } = useSession();
   const router = useRouter();
@@ -49,7 +57,71 @@ export default function AlmoxarifadoScreen() {
   const [modalVisible, setModalVisible] = useState(false);
   const [dadosEndereco, setDadosEndereco] = useState<any[]>([]);
   const [codProdSelecionado, setCodProdSelecionado] = useState<number | null>(null);
-  const [quantidadeRetirada, setQuantidadeRetirada] = useState<string>('');
+  const [quantidadeRetirada, setQuantidadeRetirada] = useState('');
+
+  // Novos estados para a lista de OPs abertas
+  const [opsAbertas, setOpsAbertas] = useState<OPAberta[]>([]);
+  const [loadingOps, setLoadingOps] = useState(true);
+  const [modalOpsVisible, setModalOpsVisible] = useState(false);
+
+  // Buscar OPs abertas ao abrir a tela
+  useEffect(() => {
+    buscarOpsAbertas();
+  }, []);
+
+  const buscarOpsAbertas = async () => {
+    try {
+      setLoadingOps(true);
+      const sql = `
+        SELECT DISTINCT
+          P.IDIPROC,
+          PRO.REFERENCIA,
+          PRO.DESCRPROD AS PRODUTOPA,
+          P.NROLOTE AS LOTE
+        FROM TPRIPROC P
+        JOIN TPRIPA PA ON P.IDIPROC = PA.IDIPROC
+        JOIN TGFPRO PRO ON PA.CODPRODPA = PRO.CODPROD
+        JOIN TPRIATV ATV ON P.IDIPROC = ATV.IDIPROC
+        JOIN TPREFX FX ON FX.IDEFX = ATV.IDEFX
+        WHERE FX.DESCRICAO = 'EMBALAGEM' 
+          AND ATV.DHACEITE IS NOT NULL
+          AND ATV.DHINICIO IS NULL 
+          AND ATV.DHFINAL IS NULL
+          AND P.STATUSPROC <> 'C'
+        ORDER BY P.IDIPROC DESC
+      `;
+      
+      const result = await queryJson('DbExplorerSP.executeQuery', { sql });
+      
+      if (result.rows.length > 0) {
+        const ops = result.rows.map((row: any) => ({
+          IDIPROC: row[0],
+          REFERENCIA: row[1],
+          PRODUTOPA: row[2],
+          LOTE: row[3]
+        }));
+        setOpsAbertas(ops);
+      } else {
+        setOpsAbertas([]);
+      }
+    } catch (error) {
+      console.error('Erro ao buscar OPs abertas:', error);
+      setError('Erro ao carregar OPs abertas');
+    } finally {
+      setLoadingOps(false);
+      // Mostrar o modal apenas se houver OPs abertas
+      if (opsAbertas.length > 0) {
+        setModalOpsVisible(true);
+      }
+    }
+  };
+
+  const selecionarOP = (op: OPAberta) => {
+    setIdiproc(op.IDIPROC.toString());
+    setModalOpsVisible(false);
+    // Buscar automaticamente os dados da OP selecionada
+    buscarDados();
+  };
 
   const verificarAtividadeEmbalagem = async (idiproc: number): Promise<boolean> => {
     try {
@@ -130,6 +202,46 @@ export default function AlmoxarifadoScreen() {
     );
   };
 
+  const criarNotaFiscalComItens = async () => {
+    try {
+      // 1. Criar a nota fiscal
+      const notaFiscal = await criarNotaFiscal({
+        IDIPROC: Number(idiproc),
+        CODEMP: 1,
+        NUMNOTA: 0,
+        CODCENCUS: 109002,
+        CODTIPOPER: 1242,
+        TIPMOV: "T",
+        CODTIPVENDA: 0,
+        CODNAT: 3010103
+      });
+
+      const nunota = notaFiscal.nunota;
+      
+      // 2. Adicionar os itens à nota fiscal
+      let sequencia = 1;
+      for (const item of dados) {
+        if (item.separado) {
+          await adicionarItemNotaFiscal({
+            NUNOTA: nunota,
+            CODPROD: item.COD_MP,
+            QTDNEG: item.separado.QTDSEPARADA,
+            SEQUENCIA: sequencia,
+            CODVOL: item.separado.UNIDADE,
+            CODLOCALORIG: 40000000,
+            CODLOCALDEST: 60000000
+          });
+          sequencia++;
+        }
+      }
+
+      return true;
+    } catch (error) {
+      console.error('Erro ao criar nota fiscal:', error);
+      throw error;
+    }
+  };
+
   const handleFinalizarSeparacao = async () => {
     if (!idiproc) {
       Alert.alert('Erro', 'Por favor, informe o número da OP primeiro');
@@ -138,7 +250,7 @@ export default function AlmoxarifadoScreen() {
 
     Alert.alert(
       'Confirmação',
-      'Tem certeza que deseja finalizar a separação?',
+      'Tem certeza que deseja finalizar a separação? Esta ação criará uma nota fiscal automaticamente.',
       [
         {
           text: 'Cancelar',
@@ -149,12 +261,18 @@ export default function AlmoxarifadoScreen() {
           onPress: async () => {
             try {
               setLoading(true);
+              
+              // 1. Criar nota fiscal e adicionar itens
+              await criarNotaFiscalComItens();
+              
+              // 2. Finalizar a separação
               await finalizarSeparacao({
                 IDIPROC: Number(idiproc),
               });
+              
               setSeparacaoFinalizada(true);
               setPodeSepararItens(false);
-              Alert.alert('Sucesso', 'Separação finalizada com sucesso!');
+              Alert.alert('Sucesso', 'Separação finalizada e nota fiscal criada com sucesso!');
             } catch (error) {
               console.error('Erro ao finalizar separação:', error);
               Alert.alert('Erro', error instanceof Error ? error.message : 'Falha ao finalizar separação');
@@ -245,7 +363,7 @@ export default function AlmoxarifadoScreen() {
       
       if (error instanceof Error) {
         if (error.message.includes('Campos de estoque não compatíveis')) {
-          errorMessage = 'Erro de compatibilidade de unidades. Verifique se a quantidade está na unidade correta.';
+          errorMessage = 'Erro de compatibilidade de unidades. Verifique si a quantidade está na unidade correta.';
         } else {
           errorMessage = error.message;
         }
@@ -461,7 +579,9 @@ export default function AlmoxarifadoScreen() {
           <Ionicons name="arrow-back" size={24} color="white" />
         </TouchableOpacity>
         <Text style={styles.headerTitle}>Consulta de OP</Text>
-        <View style={{ width: 24 }} />
+        <TouchableOpacity onPress={() => setModalOpsVisible(true)}>
+          <Ionicons name="list" size={24} color="white" />
+        </TouchableOpacity>
       </View>
 
       <ScrollView contentContainerStyle={styles.scrollContent} keyboardShouldPersistTaps="handled">
@@ -569,6 +689,56 @@ export default function AlmoxarifadoScreen() {
           </TouchableOpacity>
         ))}
       </ScrollView>
+
+      {/* Modal para seleção de OP */}
+      <Modal visible={modalOpsVisible} animationType="slide" transparent>
+        <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', alignItems: 'center' }}>
+          <View style={{ backgroundColor: '#fff', padding: 20, borderRadius: 10, width: '90%', maxHeight: '80%' }}>
+            <Text style={{ fontWeight: 'bold', fontSize: 18, marginBottom: 10, textAlign: 'center' }}>
+              OPs Abertas em Embalagem
+            </Text>
+            
+            {loadingOps ? (
+              <ActivityIndicator size="large" color="#4CAF50" />
+            ) : opsAbertas.length > 0 ? (
+              <ScrollView>
+                {opsAbertas.map((op, index) => (
+                  <TouchableOpacity
+                    key={index}
+                    style={styles.opItem}
+                    onPress={() => selecionarOP(op)}
+                  >
+                    <Text style={styles.opText}>OP: {op.IDIPROC}</Text>
+                    <Text style={styles.opDetail}>Ref: {op.REFERENCIA}</Text>
+                    <Text style={styles.opDetail}>Produto: {op.PRODUTOPA}</Text>
+                    <Text style={styles.opDetail}>Lote: {op.LOTE}</Text>
+                  </TouchableOpacity>
+                ))}
+              </ScrollView>
+            ) : (
+              <Text style={{ textAlign: 'center', marginVertical: 20 }}>
+                Nenhuma OP aberta encontrada
+              </Text>
+            )}
+            
+            {/* Botão para recarregar a lista */}
+            <TouchableOpacity
+              style={{ marginTop: 10, backgroundColor: '#2196F3', padding: 10, borderRadius: 8, flexDirection: 'row', justifyContent: 'center', alignItems: 'center' }}
+              onPress={buscarOpsAbertas}
+            >
+              <Ionicons name="refresh" size={16} color="white" style={{ marginRight: 8 }} />
+              <Text style={{ color: '#fff', textAlign: 'center' }}>Recarregar Lista</Text>
+            </TouchableOpacity>
+            
+            <TouchableOpacity
+              style={{ marginTop: 10, backgroundColor: '#4CAF50', padding: 10, borderRadius: 8 }}
+              onPress={() => setModalOpsVisible(false)}
+            >
+              <Text style={{ color: '#fff', textAlign: 'center' }}>Fechar</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
 
       <Modal visible={modalVisible} animationType="slide" transparent>
         <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', alignItems: 'center' }}>
@@ -794,5 +964,20 @@ const styles = StyleSheet.create({
     color: '#2e7d32',
     fontWeight: 'bold',
     marginLeft: 8,
+  },
+  opItem: {
+    padding: 15,
+    borderBottomWidth: 1,
+    borderBottomColor: '#ddd',
+  },
+  opText: {
+    fontWeight: 'bold',
+    fontSize: 16,
+    color: '#333',
+  },
+  opDetail: {
+    fontSize: 14,
+    color: '#666',
+    marginTop: 2,
   },
 });

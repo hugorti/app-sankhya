@@ -244,7 +244,7 @@ api.interceptors.response.use(
     } else if (!error.response) {
       // Se não houve resposta, verifica se é erro de rede
       if (error.code === 'ERR_NETWORK') {
-        // Mantém a sessão se for erro de rede (pode ser temporário)
+        // Mantém a sessão se for erro de réseau (pode ser temporário)
         return Promise.reject(new Error('Erro de conexão. Verifique sua internet.'));
       }
       throw new Error('Erro de comunicação com o servidor');
@@ -505,7 +505,7 @@ const buscarIdiAtvEmbalagem = async (idiproc: number): Promise<number | null> =>
       SELECT ATV.IDIATV
       FROM TPRIATV ATV
       JOIN TPREFX FX ON FX.IDEFX = ATV.IDEFX
-      WHERE ATV.IDIPROC = ${idiproc} AND FX.DESCRICAO = 'EMBALAGEM' AND ATV.DHACEITE IS NOT NULL
+      WHERE ATV.IDIPROC = ${idiproc} AND FX.DESCRICAO = 'EMBALAGEM' AND ATV.DHACEITE IS NOT NULL;
     `;
     
     const result = await queryJson('DbExplorerSP.executeQuery', { sql });
@@ -691,6 +691,127 @@ export const registrarRetiradaAlmoxarifado = async (data: {
     return response.data.responseBody;
   } catch (error) {
     console.error('Error registering withdrawal:', error);
+    throw error;
+  }
+};
+
+// Função para criar uma nota fiscal
+export const criarNotaFiscal = async (data: {
+  IDIPROC: number;
+  CODEMP: number;
+  NUMNOTA: number;
+  CODCENCUS: number;
+  CODTIPOPER: number;
+  TIPMOV: string;
+  CODTIPVENDA: number;
+  CODNAT: number;
+}): Promise<any> => {
+  const requestBody = {
+    serviceName: "CRUDServiceProvider.saveRecord",
+    requestBody: {
+      dataSet: {
+        rootEntity: "CabecalhoNota",
+        includePresentationFields: "N",
+        dataRow: {
+          localFields: {
+            IDIPROC: { "$": data.IDIPROC },
+            CODEMP: { "$": data.CODEMP },
+            NUMNOTA: { "$": data.NUMNOTA },
+            CODCENCUS: { "$": data.CODCENCUS },
+            CODTIPOPER: { "$": data.CODTIPOPER },
+            TIPMOV: { "$": data.TIPMOV },
+            CODTIPVENDA: { "$": data.CODTIPVENDA },
+            CODNAT: { "$": data.CODNAT }
+          }
+        },
+        entity: {
+          fieldset: {
+            list: "NUNOTA, TIPMOV, NUMNOTA, IDIPROC"
+          }
+        }
+      }
+    }
+  };
+
+  try {
+    const response = await api.post(
+      'mge/service.sbr?serviceName=CRUDServiceProvider.saveRecord&outputType=json',
+      requestBody,
+      { headers: { 'Content-Type': 'application/json' } }
+    );
+
+    if (response.data.status !== "1") {
+      throw new Error(response.data.statusMessage || 'Erro ao criar nota fiscal');
+    }
+
+    // Extrai o NUNOTA da resposta
+    const nunota = response.data.responseBody?.entity?.NUNOTA;
+    if (!nunota) {
+      throw new Error('NUNOTA não retornado na criação da nota fiscal');
+    }
+
+    return {
+      ...response.data.responseBody,
+      nunota: nunota
+    };
+  } catch (error) {
+    console.error('Error creating invoice:', error);
+    throw error;
+  }
+};
+
+// Função para adicionar itens à nota fiscal
+export const adicionarItemNotaFiscal = async (data: {
+  NUNOTA: number;
+  CODPROD: number;
+  QTDNEG: number;
+  SEQUENCIA: number;
+  CODVOL: string;
+  CODLOCALORIG: number;
+  CODLOCALDEST: number;
+}): Promise<any> => {
+  const requestBody = {
+    serviceName: "CRUDServiceProvider.saveRecord",
+    requestBody: {
+      dataSet: {
+        rootEntity: "ItemNota",
+        includePresentationFields: "N",
+        dataRow: {
+          localFields: {
+            CODPROD: { "$": data.CODPROD },
+            QTDNEG: { "$": data.QTDNEG },
+            SEQUENCIA: { "$": data.SEQUENCIA },
+            CODVOL: { "$": data.CODVOL },
+            CODLOCALORIG: { "$": data.CODLOCALORIG },
+            CODLOCALDEST: { "$": data.CODLOCALDEST }
+          },
+          key: {
+            NUNOTA: { "$": data.NUNOTA }
+          }
+        },
+        entity: {
+          fieldset: {
+            list: "NUNOTA, CODPROD, QTDNEG"
+          }
+        }
+      }
+    }
+  };
+
+  try {
+    const response = await api.post(
+      'mge/service.sbr?serviceName=CRUDServiceProvider.saveRecord&outputType=json',
+      requestBody,
+      { headers: { 'Content-Type': 'application/json' } }
+    );
+
+    if (response.data.status !== "1") {
+      throw new Error(response.data.statusMessage || 'Erro ao adicionar item à nota fiscal');
+    }
+
+    return response.data.responseBody;
+  } catch (error) {
+    console.error('Error adding item to invoice:', error);
     throw error;
   }
 };
