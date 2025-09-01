@@ -441,63 +441,6 @@ export const salvarConferenciaAPI = async (data: {
   }
 };
 
-export const alterarEstoqueEndereco = async (data: {
-  CODEMP: number;
-  CODPROD: number;
-  CODLOCAL: number;
-  CODEND: string; // Alterado para string pois parece ser um código com pontos
-  ESTOQUE: number;
-  CODVOL: string;
-  ESTOQUEVOLPAD: number;
-}): Promise<any> => {
-  const requestBody = {
-    serviceName: "CRUDServiceProvider.saveRecord",
-    requestBody: {
-      dataSet: {
-        rootEntity: "EstoqueEndereco",
-        includePresentationFields: "N",
-        dataRow: {
-          localFields: {
-            ESTOQUE: { "$": data.ESTOQUE },
-            ESTOQUEVOLPAD: { "$": data.ESTOQUEVOLPAD }
-          },
-          key: {
-            CODEMP: { "$": data.CODEMP },
-            CODPROD: { "$": data.CODPROD },
-            CODLOCAL: { "$": data.CODLOCAL },
-            CONTROLE: { "$": null },
-            CODEND: { "$": data.CODEND }, // Já será enviado como string
-            CODVOL: { "$": data.CODVOL }, // Adicionado
-            CODPARC: { "$": 0 }
-          }
-        },
-        entity: {
-          fieldset: {
-            list: "CODEMP,CODPROD,ESTOQUE,ESTOQUEVOLPAD"
-          }
-        }
-      }
-    }
-  };
-
-  try {
-    const response = await api.post(
-      'mge/service.sbr?serviceName=CRUDServiceProvider.saveRecord&outputType=json',
-      requestBody,
-      { headers: { 'Content-Type': 'application/json' } }
-    );
-
-    if (response.data.status !== "1") {
-      throw new Error(response.data.statusMessage || 'Erro ao alterar estoque');
-    }
-
-    return response.data.responseBody;
-  } catch (error) {
-    console.error('Error updating stock:', error);
-    throw error; // Rejoga o erro para ser tratado no componente
-  }
-};
-
 // Adicione esta função auxiliar para buscar o IDIATV da operação de EMBALAGEM
 const buscarIdiAtvEmbalagem = async (idiproc: number): Promise<number | null> => {
   try {
@@ -650,6 +593,7 @@ export const registrarRetiradaAlmoxarifado = async (data: {
   USUARIO: string;
   UNIDADE: string;
   OP: number;
+  LOTE: string;
 }): Promise<any> => {
   const requestBody = {
     serviceName: "CRUDServiceProvider.saveRecord",
@@ -661,10 +605,11 @@ export const registrarRetiradaAlmoxarifado = async (data: {
           localFields: {
             CODPROD: { "$": data.CODPROD },
             DESCRPROD: { "$": data.DESCRPROD },
-            ESTOQUE: { "$": data.ESTOQUE },
+            ESTOQUE: { "$": data.ESTOQUE }, // Agora será a quantidade da OP
             QTDSEPARADA: { "$": data.QTDSEPARADA },
             USUARIO: { "$": data.USUARIO },
             UNIDADE: { "$": data.UNIDADE },
+            LOTE: { "$": data.LOTE },
             OP: { "$": data.OP }
           }
         },

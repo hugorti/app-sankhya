@@ -13,6 +13,13 @@ export type RootStackParamList = {
   };
   almoxarife: undefined;
   romaneio: undefined;
+  resumoSeparacao: {
+    itensSeparados: string;
+    idiproc: string;
+    codemp: string;
+    referencia?: string;
+    produto?: string;
+  };
 };
 
 declare global {

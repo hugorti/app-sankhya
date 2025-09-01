@@ -1,19 +1,20 @@
 // app/almoxarifado.tsx
-import { View, Text, StyleSheet, ActivityIndicator, TextInput, TouchableOpacity, ScrollView, SafeAreaView, Modal, Alert } from 'react-native';
-import { useState, useEffect } from 'react'; // Adicionei o useEffect
+import { View, Text, StyleSheet, ActivityIndicator, TextInput, TouchableOpacity, ScrollView, SafeAreaView, Modal, Alert, FlatList } from 'react-native';
+import { useState, useEffect } from 'react';
 import { useRouter } from 'expo-router';
 import { queryJson, registrarRetiradaAlmoxarifado, iniciarSeparacao, finalizarSeparacao, criarNotaFiscal, adicionarItemNotaFiscal } from '@/services/api';
 import { useSession } from '@/hooks/useSession';
 import { Ionicons } from '@expo/vector-icons';
-import { alterarEstoqueEndereco } from '@/services/api';
 
 interface DadosSeparacao {
   CODPROD: number;
   DESCRPROD: string;
-  QTDSEPARADA: number;
+  ESTOQUE: string;
+  QTDSEPARADA: string;
   USUARIO: string;
   OP: number;
   UNIDADE: string;
+  LOTE: string; // Adicionar campo LOTE
 }
 
 interface DadosAlmoxarifado {
@@ -24,6 +25,7 @@ interface DadosAlmoxarifado {
   COD_MP: number;
   PRODUTOMP: string;
   QUANTIDADE: string;
+  UNIDADE: string;
   SEQUENCIA: number;
   FASE: string;
   TEMPERATURA: string;
@@ -32,7 +34,6 @@ interface DadosAlmoxarifado {
   separado?: DadosSeparacao;
 }
 
-// Nova interface para as OPs abertas
 interface OPAberta {
   IDIPROC: number;
   REFERENCIA: string;
@@ -58,16 +59,32 @@ export default function AlmoxarifadoScreen() {
   const [dadosEndereco, setDadosEndereco] = useState<any[]>([]);
   const [codProdSelecionado, setCodProdSelecionado] = useState<number | null>(null);
   const [quantidadeRetirada, setQuantidadeRetirada] = useState('');
+  const [modalMode, setModalMode] = useState<'lista' | 'confirmacao'>('lista');
 
   // Novos estados para a lista de OPs abertas
   const [opsAbertas, setOpsAbertas] = useState<OPAberta[]>([]);
   const [loadingOps, setLoadingOps] = useState(true);
   const [modalOpsVisible, setModalOpsVisible] = useState(false);
+  const [detalhesEnderecoVisivel, setDetalhesEnderecoVisivel] = useState(false);
+  const [enderecoSelecionado, setEnderecoSelecionado] = useState<any>(null);
+
+  const [loteRetirada, setLoteRetirada] = useState('');
 
   // Buscar OPs abertas ao abrir a tela
   useEffect(() => {
     buscarOpsAbertas();
   }, []);
+
+const handleItemPress = async (item: any) => {
+  if (!item.separado && podeSepararItens) {
+    setCodProdSelecionado(item.COD_MP);
+    setEndereco('');
+    setModalVisible(true);
+    
+    // Carrega os endereços diretamente
+    await buscarEnderecosProduto(item.COD_MP);
+  }
+};
 
   const buscarOpsAbertas = async () => {
     try {
@@ -109,7 +126,6 @@ export default function AlmoxarifadoScreen() {
       setError('Erro ao carregar OPs abertas');
     } finally {
       setLoadingOps(false);
-      // Mostrar o modal apenas se houver OPs abertas
       if (opsAbertas.length > 0) {
         setModalOpsVisible(true);
       }
@@ -119,7 +135,6 @@ export default function AlmoxarifadoScreen() {
   const selecionarOP = (op: OPAberta) => {
     setIdiproc(op.IDIPROC.toString());
     setModalOpsVisible(false);
-    // Buscar automaticamente os dados da OP selecionada
     buscarDados();
   };
 
@@ -154,8 +169,8 @@ export default function AlmoxarifadoScreen() {
       if (result.rows.length > 0) {
         const row = result.rows[0];
         return {
-          dhInicio: row[0], // DHINICIO
-          dhFinal: row[1]   // DHFINAL
+          dhInicio: row[0],
+          dhFinal: row[1]
         };
       }
       return { dhInicio: null, dhFinal: null };
@@ -202,46 +217,6 @@ export default function AlmoxarifadoScreen() {
     );
   };
 
-  const criarNotaFiscalComItens = async () => {
-    try {
-      // 1. Criar a nota fiscal
-      const notaFiscal = await criarNotaFiscal({
-        IDIPROC: Number(idiproc),
-        CODEMP: 1,
-        NUMNOTA: 0,
-        CODCENCUS: 109002,
-        CODTIPOPER: 1242,
-        TIPMOV: "T",
-        CODTIPVENDA: 0,
-        CODNAT: 3010103
-      });
-
-      const nunota = notaFiscal.nunota;
-      
-      // 2. Adicionar os itens à nota fiscal
-      let sequencia = 1;
-      for (const item of dados) {
-        if (item.separado) {
-          await adicionarItemNotaFiscal({
-            NUNOTA: nunota,
-            CODPROD: item.COD_MP,
-            QTDNEG: item.separado.QTDSEPARADA,
-            SEQUENCIA: sequencia,
-            CODVOL: item.separado.UNIDADE,
-            CODLOCALORIG: 40000000,
-            CODLOCALDEST: 60000000
-          });
-          sequencia++;
-        }
-      }
-
-      return true;
-    } catch (error) {
-      console.error('Erro ao criar nota fiscal:', error);
-      throw error;
-    }
-  };
-
   const handleFinalizarSeparacao = async () => {
     if (!idiproc) {
       Alert.alert('Erro', 'Por favor, informe o número da OP primeiro');
@@ -250,7 +225,7 @@ export default function AlmoxarifadoScreen() {
 
     Alert.alert(
       'Confirmação',
-      'Tem certeza que deseja finalizar a separação? Esta ação criará uma nota fiscal automaticamente.',
+      'Tem certeza que deseja finalizar a separação? Você será redirecionado para criar o movimento.',
       [
         {
           text: 'Cancelar',
@@ -262,17 +237,28 @@ export default function AlmoxarifadoScreen() {
             try {
               setLoading(true);
               
-              // 1. Criar nota fiscal e adicionar itens
-              await criarNotaFiscalComItens();
-              
-              // 2. Finalizar a separação
+              // 1. Primeiro finaliza a separação no sistema
               await finalizarSeparacao({
                 IDIPROC: Number(idiproc),
               });
               
+              // 2. Atualiza o estado local
               setSeparacaoFinalizada(true);
               setPodeSepararItens(false);
-              Alert.alert('Sucesso', 'Separação finalizada e nota fiscal criada com sucesso!');
+              
+              // 3. Navega para a tela de resumo
+              router.push({
+                pathname: '/resumoSeparacao',
+                params: {
+                  itensSeparados: JSON.stringify(dados.filter(item => item.separado)),
+                  idiproc: idiproc,
+                  codemp: '1', // Ajuste conforme necessário
+                  // Adicione outros parâmetros se necessário
+                  referencia: dados[0]?.REFERENCIA || '',
+                  produto: dados[0]?.PRODUTOMP || '',
+                }
+              });
+
             } catch (error) {
               console.error('Erro ao finalizar separação:', error);
               Alert.alert('Erro', error instanceof Error ? error.message : 'Falha ao finalizar separação');
@@ -285,120 +271,215 @@ export default function AlmoxarifadoScreen() {
     );
   };
 
-  const confirmarRetirada = async () => {
-    if (!dadosEndereco.length || codProdSelecionado === null) return;
-
-    const d = dadosEndereco[0];
-    const codProd = d[0];
-    const codVol = d[1];
-    const estoqueAtual = Number(d[5]);
-    const estoqueVolPadAtual = Number(d[6]);
-    const quantidadeVolume = Number(d[4]);
-    const descricaoProduto = dados.find(item => item.COD_MP === codProd)?.PRODUTOMP || '';
-    const qtdRetirar = Number(quantidadeRetirada);
-    const usuario = session?.username || "Usuário";
-
-    if (isNaN(qtdRetirar)) {
-      Alert.alert('Erro', 'Quantidade inválida');
-      return;
-    }
-
-    if (qtdRetirar <= 0) {
-      Alert.alert('Erro', 'A quantidade deve ser maior que zero');
-      return;
-    }
-
-    if (qtdRetirar > estoqueAtual) {
-      Alert.alert('Erro', `Quantidade indisponível. Estoque atual: ${estoqueAtual}`);
-      return;
-    }
-
-    const novoEstoque = estoqueAtual - qtdRetirar;
-    const novoEstoqueVolPad = estoqueVolPadAtual - (qtdRetirar * quantidadeVolume);
-
+  const buscarEnderecosProduto = async (codProd: number) => {
     try {
-      await alterarEstoqueEndereco({
-        CODEMP: 2,
-        CODPROD: codProd,
-        CODLOCAL: 0,
-        CODEND: d[3],
-        ESTOQUE: novoEstoque,
-        ESTOQUEVOLPAD: novoEstoqueVolPad,
-        CODVOL: codVol
-      });
-
-      await registrarRetiradaAlmoxarifado({
-        CODPROD: codProd,
-        DESCRPROD: descricaoProduto,
-        ESTOQUE: novoEstoque.toString(),
-        QTDSEPARADA: qtdRetirar.toString(),
-        USUARIO: usuario,
-        OP: Number(idiproc),
-        UNIDADE: codVol
-      });
-
-      setDados(prev => prev.map(item => {
-        if (item.COD_MP === codProd) {
-          return {
-            ...item,
-            separado: {
-              CODPROD: codProd,
-              DESCRPROD: descricaoProduto,
-              QTDSEPARADA: qtdRetirar,
-              USUARIO: usuario,
-              OP: Number(idiproc),
-              UNIDADE: codVol
-            }
-          };
-        }
-        return item;
-      }));
-
-      setModalVisible(false);
-      setDadosEndereco([]);
-      setQuantidadeRetirada('');
-    } catch (error) {
-      console.error('Erro na retirada:', error);
-      let errorMessage = 'Falha ao registrar retirada';
+      setLoading(true);
+      const sql = `
+        SELECT 
+          EXP.CODPROD,
+          PRO.DESCRPROD,
+          ED.ENDERECO,
+          ED.CODEND,
+          VOA.QUANTIDADE,
+          EST.ESTOQUE,
+          EST.ESTOQUEVOLPAD,
+          EST.CODVOL
+        FROM TGWEXP EXP
+        LEFT JOIN TGWEND ED ON ED.CODEND = EXP.CODEND
+        JOIN TGFPRO PRO ON PRO.CODPROD = EXP.CODPROD
+        LEFT JOIN TGWEST EST ON EST.CODPROD = EXP.CODPROD AND EST.CODEND = EXP.CODEND
+        LEFT JOIN TGFVOA VOA ON VOA.CODPROD = EXP.CODPROD AND VOA.CODVOL = EST.CODVOL
+        WHERE EXP.CODPROD = ${codProd}
+        ORDER BY ED.ENDERECO
+      `;
       
-      if (error instanceof Error) {
-        if (error.message.includes('Campos de estoque não compatíveis')) {
-          errorMessage = 'Erro de compatibilidade de unidades. Verifique si a quantidade está na unidade correta.';
-        } else {
-          errorMessage = error.message;
-        }
+      const res = await queryJson('DbExplorerSP.executeQuery', { sql });
+      if (res.rows.length > 0) {
+        setDadosEndereco(res.rows);
+        setEndereco('');
+        setModalMode('lista');
+        setModalVisible(true);
+        
+        // Mostrar automaticamente os detalhes do primeiro endereço
+        setEnderecoSelecionado(res.rows[0]);
+        setDetalhesEnderecoVisivel(true);
+      } else {
+        Alert.alert('Aviso', 'Nenhum endereço encontrado para este produto');
       }
-      
-      Alert.alert('Erro', errorMessage);
+    } catch (err) {
+      console.error('Erro ao buscar endereços:', err);
+      Alert.alert('Erro', 'Erro ao buscar endereços do produto');
+    } finally {
+      setLoading(false);
     }
   };
 
-  const buscarSeparacoes = async (idiproc: number) => {
+  const buscarEnderecoEspecifico = async () => {
+    if (!endereco.trim() || !codProdSelecionado) return;
+    
     try {
       const sql = `
         SELECT 
-          CODPROD, DESCRPROD, QTDSEPARADA, USUARIO, OP, UNIDADE
-        FROM AD_ALMOXARIFEWMS
-        WHERE OP = ${idiproc}
+          EXP.CODPROD,
+          PRO.DESCRPROD,
+          ED.ENDERECO,
+          ED.CODEND,
+          VOA.QUANTIDADE,
+          EST.ESTOQUE,
+          EST.ESTOQUEVOLPAD,
+          EST.CODVOL
+        FROM TGWEXP EXP
+        LEFT JOIN TGWEND ED ON ED.CODEND = EXP.CODEND
+        JOIN TGFPRO PRO ON PRO.CODPROD = EXP.CODPROD
+        LEFT JOIN TGWEST EST ON EST.CODPROD = EXP.CODPROD AND EST.CODEND = EXP.CODEND
+        LEFT JOIN TGFVOA VOA ON VOA.CODPROD = EXP.CODPROD AND VOA.CODVOL = EST.CODVOL
+        WHERE EXP.CODPROD = ${codProdSelecionado}
+          AND ED.ENDERECO = '${endereco.trim().toUpperCase()}'
       `;
       
-      const result = await queryJson('DbExplorerSP.executeQuery', { sql });
+      const res = await queryJson('DbExplorerSP.executeQuery', { sql });
       
-      if (result.rows.length > 0) {
-        return result.rows.map((row: any) => ({
-          CODPROD: row[0],
-          DESCRPROD: row[1],
-          QTDSEPARADA: row[2],
-          USUARIO: row[3],
-          OP: row[4],
-          UNIDADE: row[5] || 'UN'
-        }));
+      if (res.rows.length > 0) {
+        setDadosEndereco(res.rows);
+        setModalMode('confirmacao');
+      } else {
+        Alert.alert('Erro', 'Endereço não encontrado. Verifique si digitou corretamente.');
       }
-      return [];
-    } catch (error) {
-      console.error('Erro ao buscar separações:', error);
-      return [];
+    } catch (err) {
+      console.error('Erro ao buscar endereço específico:', err);
+      Alert.alert('Erro', 'Erro ao buscar endereço');
     }
+  };
+
+  const confirmarRetirada = async () => {
+  if (!dadosEndereco.length || codProdSelecionado === null) return;
+
+  // Encontrar o item correspondente na lista de dados
+  const itemOP = dados.find(item => item.COD_MP === codProdSelecionado);
+  if (!itemOP) {
+    Alert.alert('Erro', 'Item não encontrado na OP');
+    return;
+  }
+
+  const d = dadosEndereco[0];
+  const codProd = d[0];
+  const descricaoProduto = d[1];
+  
+  // Extrair a quantidade numérica
+  const quantidadeMatch = itemOP.QUANTIDADE.match(/(\d+\.?\d*)/);
+  const quantidadeOPNumerica = quantidadeMatch ? parseFloat(quantidadeMatch[1]) : 0;
+  const quantidadeOP = quantidadeOPNumerica.toString();
+  
+  // Extrair a unidade
+  const unidadeMatch = itemOP.QUANTIDADE.match(/[a-zA-Z]+$/);
+  const codVol = unidadeMatch ? unidadeMatch[0] : itemOP.UNIDADE || 'UN';
+  
+  const qtdRetirar = quantidadeRetirada;
+  const usuario = session?.username || "Usuário";
+  const lote = loteRetirada || itemOP.LOTE; // Usar o lote digitado ou o lote da OP
+
+  if (!qtdRetirar) {
+    Alert.alert('Erro', 'Quantidade inválida');
+    return;
+  }
+
+  if (!lote) {
+    Alert.alert('Erro', 'Por favor, informe o lote');
+    return;
+  }
+
+  const qtdRetirarNumerica = parseFloat(qtdRetirar);
+
+  if (qtdRetirarNumerica <= 0) {
+    Alert.alert('Erro', 'A quantidade deve ser maior que zero');
+    return;
+  }
+
+  if (qtdRetirarNumerica < quantidadeOPNumerica) {
+    Alert.alert('Erro', `Quantidade solicitada (${qtdRetirar}) é menor que a quantidade da OP (${quantidadeOPNumerica})`);
+    return;
+  }
+
+  try {
+    await registrarRetiradaAlmoxarifado({
+      CODPROD: codProd,
+      DESCRPROD: descricaoProduto,
+      ESTOQUE: quantidadeOP,
+      QTDSEPARADA: qtdRetirar,
+      USUARIO: usuario,
+      OP: Number(idiproc),
+      UNIDADE: codVol,
+      LOTE: lote // Usar o lote informado
+    });
+
+    setDados(prev => prev.map(item => {
+      if (item.COD_MP === codProd) {
+        return {
+          ...item,
+          separado: {
+            CODPROD: codProd,
+            DESCRPROD: descricaoProduto,
+            ESTOQUE: quantidadeOP,
+            QTDSEPARADA: qtdRetirar,
+            USUARIO: usuario,
+            OP: Number(idiproc),
+            UNIDADE: codVol,
+            LOTE: lote
+          }
+        };
+      }
+      return item;
+    }));
+
+    setModalVisible(false);
+    setDadosEndereco([]);
+    setEndereco('');
+    setQuantidadeRetirada('');
+    setLoteRetirada(''); // Limpar o campo do lote
+    Alert.alert('Sucesso', 'Retirada registrada com sucesso!');
+  } catch (error) {
+    console.error('Erro na retirada:', error);
+    let errorMessage = 'Falha ao registrar retirada';
+    
+    if (error instanceof Error) {
+      if (error.message.includes('Campos de estoque não compatíveis')) {
+        errorMessage = 'Erro de compatibilidade de unidades. Verifique se a quantidade está na unidade correta.';
+      } else {
+        errorMessage = error.message;
+      }
+    }
+    
+    Alert.alert('Erro', errorMessage);
+  }
+  };
+
+  const buscarSeparacoes = async (idiproc: number) => {
+  try {
+    const sql = `
+      SELECT 
+        CODPROD, DESCRPROD, QTDSEPARADA, USUARIO, OP, UNIDADE, LOTE
+      FROM AD_ALMOXARIFEWMS
+      WHERE OP = ${idiproc}
+    `;
+    
+    const result = await queryJson('DbExplorerSP.executeQuery', { sql });
+    
+    if (result.rows.length > 0) {
+      return result.rows.map((row: any) => ({
+        CODPROD: row[0],
+        DESCRPROD: row[1],
+        QTDSEPARADA: row[2],
+        USUARIO: row[3],
+        OP: row[4],
+        UNIDADE: row[5] || 'UN',
+        LOTE: row[6] || '' // Incluir o lote
+      }));
+    }
+    return [];
+  } catch (error) {
+    console.error('Erro ao buscar separações:', error);
+    return [];
+  }
   };
 
   const buscarDados = async () => {
@@ -412,7 +493,6 @@ export default function AlmoxarifadoScreen() {
       setSeparacaoFinalizada(false);
       setPodeSepararItens(false);
       
-      // Verifica se tem atividade de embalagem
       const temEmbalagem = await verificarAtividadeEmbalagem(Number(idiproc));
       setTemAtividadeEmbalagem(temEmbalagem);
       
@@ -421,7 +501,6 @@ export default function AlmoxarifadoScreen() {
         return;
       }
 
-      // Verifica o status da separação
       const status = await verificarStatusSeparacao(Number(idiproc));
       setSeparacaoIniciada(status.dhInicio !== null);
       setSeparacaoFinalizada(status.dhFinal !== null);
@@ -442,6 +521,7 @@ export default function AlmoxarifadoScreen() {
               ELSE
                 FORMAT((MP.QTDMISTURA * PA.QTDPRODUZIR), '0.#######') + ' ' + MP.CODVOL
             END AS QUANTIDADE,
+            MP.CODVOL AS UNIDADE,
             MP.AD_SEQUENCIAMP AS SEQUENCIA,
             MP.AD_FASEMP AS FASE,
             MP.AD_TEMPMP AS TEMPERATURA,
@@ -484,7 +564,7 @@ export default function AlmoxarifadoScreen() {
         )
         SELECT
           IDIPROC, REFERENCIA, PRODUTOPA, LOTE, COD_MP, PRODUTOMP, QUANTIDADE, 
-          SEQUENCIA, FASE, TEMPERATURA, OBSERVACAO, EXECUTANTE
+           UNIDADE, SEQUENCIA, FASE, TEMPERATURA, OBSERVACAO, EXECUTANTE
         FROM RankedData
         WHERE rn = 1
         ORDER BY SEQUENCIA
@@ -506,11 +586,12 @@ export default function AlmoxarifadoScreen() {
             COD_MP: codProdMP,
             PRODUTOMP: row[5],
             QUANTIDADE: row[6],
-            SEQUENCIA: row[7],
-            FASE: row[8],
-            TEMPERATURA: row[9],
-            OBSERVACAO: row[10],
-            EXECUTANTE: row[11],
+            UNIDADE: row[8], // Unidade da OP
+            SEQUENCIA: row[9],
+            FASE: row[10],
+            TEMPERATURA: row[11],
+            OBSERVACAO: row[12],
+            EXECUTANTE: row[13],
             separado: separacao ? {
               CODPROD: separacao.CODPROD,
               DESCRPROD: separacao.DESCRPROD,
@@ -523,7 +604,7 @@ export default function AlmoxarifadoScreen() {
         });
         setDados(dadosFormatados);
       } else {
-        setError('Nenhum registro dessa OP em embalagem ou OP inexistente' );
+        setError('Nenhum registro dessa OP em embalagem ou OP inexistente');
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Erro ao buscar dados');
@@ -532,129 +613,97 @@ export default function AlmoxarifadoScreen() {
     }
   };
 
-  const buscarEndereco = async () => {
-    if (!endereco.trim() || !codProdSelecionado) return;
-    try {
-      const sql = `
-        SELECT 
-          EST.CODPROD,
-          EST.CODVOL,
-          ED.ENDERECO,
-          ED.CODEND,
-          VOA.QUANTIDADE,
-          EST.ESTOQUE,
-          EST.ESTOQUEVOLPAD
-        FROM TGWEST EST
-        JOIN TGFVOA VOA 
-          ON VOA.CODPROD = EST.CODPROD
-          AND VOA.CODVOL = EST.CODVOL
-        JOIN TGWEND ED 
-          ON ED.CODEND = EST.CODEND
-        WHERE EST.CODPROD = ${codProdSelecionado}
-          AND EST.CODVOL IN ('PL', 'UN', 'CX', 'KG')
-          AND ED.ENDERECO LIKE '%${endereco}%';
-      `;
-      const res = await queryJson('DbExplorerSP.executeQuery', { sql });
-      if (res.rows.length > 0) {
-        setDadosEndereco(res.rows);
-        setModalVisible(true);
-      } else {
-        alert('Endereço não encontrado');
-      }
-    } catch (err) {
-      console.error(err);
-    }
-  };
-
-  // Função para verificar se todos os itens foram separados
   const todosItensSeparados = () => {
     if (dados.length === 0) return false;
     return dados.every(item => item.separado);
   };
 
   return (
-    <SafeAreaView style={styles.container}>
-      <View style={styles.header}>
-        <TouchableOpacity onPress={() => router.back()}>
-          <Ionicons name="arrow-back" size={24} color="white" />
+  <SafeAreaView style={styles.container}>
+    <View style={styles.header}>
+      <TouchableOpacity onPress={() => router.back()}>
+        <Ionicons name="arrow-back" size={24} color="white" />
+      </TouchableOpacity>
+      <Text style={styles.headerTitle}>Consulta de OP</Text>
+      <TouchableOpacity onPress={() => setModalOpsVisible(true)}>
+        <Ionicons name="list" size={24} color="white" />
+      </TouchableOpacity>
+    </View>
+
+    <ScrollView contentContainerStyle={styles.scrollContent} keyboardShouldPersistTaps="handled">
+      <View style={styles.formContainer}>
+        <Text style={styles.label}>Número da OP</Text>
+        <TextInput
+          style={styles.input}
+          placeholder="Digite o número da OP"
+          placeholderTextColor="#999"
+          keyboardType="numeric"
+          value={idiproc}
+          onChangeText={setIdiproc}
+        />
+        <TouchableOpacity style={styles.searchButton} onPress={buscarDados} disabled={loading || !idiproc}>
+          <Ionicons name="search" size={24} color="white" />
+          <Text style={styles.searchButtonText}>{loading ? 'Buscando...' : 'Consultar OP'}</Text>
         </TouchableOpacity>
-        <Text style={styles.headerTitle}>Consulta de OP</Text>
-        <TouchableOpacity onPress={() => setModalOpsVisible(true)}>
-          <Ionicons name="list" size={24} color="white" />
-        </TouchableOpacity>
+
+        <View style={styles.buttonGroup}>
+          {/* Mostrar botão Iniciar apenas se DHINICIO for null */}
+          {!separacaoIniciada && (
+            <TouchableOpacity 
+              style={[
+                styles.actionButton, 
+                !temAtividadeEmbalagem ? styles.actionButtonDisabled : styles.iniciarButton
+              ]} 
+              onPress={handleIniciarSeparacao} 
+              disabled={loading || !temAtividadeEmbalagem || !dados.length}
+            >
+              <Ionicons name="play" size={20} color="white" />
+              <Text style={styles.actionButtonText}>
+                {loading ? 'Processando...' : !temAtividadeEmbalagem ? 'OP não está em EMBALAGEM' : 'Iniciar Separação'}
+              </Text>
+            </TouchableOpacity>
+          )}
+
+          {/* Mostrar botão Finalizar apenas se DHINICIO não for null e DHFINAL for null */}
+          {separacaoIniciada && !separacaoFinalizada && (
+            <TouchableOpacity 
+              style={[
+                styles.finalizarButton,
+                !todosItensSeparados() && styles.actionButtonDisabled
+              ]} 
+              onPress={handleFinalizarSeparacao} 
+              disabled={loading || !todosItensSeparados()}
+            >
+              <Ionicons name="checkmark" size={20} color="white" />
+              <Text style={styles.actionButtonText}>
+                {loading ? 'Processando...' : 
+                 todosItensSeparados() ? 'Finalizar Separação' : 'Separe todos os itens'}
+              </Text>
+            </TouchableOpacity>
+          )}
+
+          {/* Mostrar mensagem quando separação estiver finalizada */}
+          {separacaoFinalizada && (
+            <View style={styles.statusMessage}>
+              <Ionicons name="checkmark-done" size={20} color="#2e7d32" />
+              <Text style={styles.statusMessageText}>Separação finalizada</Text>
+            </View>
+          )}
+        </View>
       </View>
 
-      <ScrollView contentContainerStyle={styles.scrollContent} keyboardShouldPersistTaps="handled">
-        <View style={styles.formContainer}>
-          <Text style={styles.label}>Número da OP</Text>
-          <TextInput
-            style={styles.input}
-            placeholder="Digite o número da OP"
-            placeholderTextColor="#999"
-            keyboardType="numeric"
-            value={idiproc}
-            onChangeText={setIdiproc}
-          />
-          <TouchableOpacity style={styles.searchButton} onPress={buscarDados} disabled={loading || !idiproc}>
-            <Ionicons name="search" size={24} color="white" />
-            <Text style={styles.searchButtonText}>{loading ? 'Buscando...' : 'Consultar OP'}</Text>
-          </TouchableOpacity>
-
-          <View style={styles.buttonGroup}>
-            {/* Mostrar botão Iniciar apenas se DHINICIO for null */}
-            {!separacaoIniciada && (
-              <TouchableOpacity 
-                style={[
-                  styles.actionButton, 
-                  !temAtividadeEmbalagem ? styles.actionButtonDisabled : styles.iniciarButton
-                ]} 
-                onPress={handleIniciarSeparacao} 
-                disabled={loading || !temAtividadeEmbalagem || !dados.length}
-              >
-                <Ionicons name="play" size={20} color="white" />
-                <Text style={styles.actionButtonText}>
-                  {loading ? 'Processando...' : !temAtividadeEmbalagem ? 'OP não está em EMBALAGEM' : 'Iniciar Separação'}
-                </Text>
-              </TouchableOpacity>
-            )}
-
-            {/* Mostrar botão Finalizar apenas se DHINICIO não for null e DHFINAL for null */}
-            {separacaoIniciada && !separacaoFinalizada && (
-              <TouchableOpacity 
-                style={[
-                  styles.finalizarButton,
-                  !todosItensSeparados() && styles.actionButtonDisabled
-                ]} 
-                onPress={handleFinalizarSeparacao} 
-                disabled={loading || !todosItensSeparados()}
-              >
-                <Ionicons name="checkmark" size={20} color="white" />
-                <Text style={styles.actionButtonText}>
-                  {loading ? 'Processando...' : 
-                   todosItensSeparados() ? 'Finalizar Separação' : 'Separe todos os itens'}
-                </Text>
-              </TouchableOpacity>
-            )}
-
-            {/* Mostrar mensagem quando separação estiver finalizada */}
-            {separacaoFinalizada && (
-              <View style={styles.statusMessage}>
-                <Ionicons name="checkmark-done" size={20} color="#2e7d32" />
-                <Text style={styles.statusMessageText}>Separação finalizada</Text>
-              </View>
-            )}
-          </View>
+      {error && (
+        <View style={styles.errorContainer}>
+          <Text style={styles.errorText}>{error}</Text>
         </View>
+      )}
 
-        {error && (
-          <View style={styles.errorContainer}>
-            <Text style={styles.errorText}>{error}</Text>
-          </View>
-        )}
-
-        {dados.map((item, index) => (
+      <FlatList
+        data={dados}
+        keyExtractor={(item, index) => index.toString()}
+        scrollEnabled={false} // Desabilita scroll pois já está dentro de ScrollView
+        renderItem={({ item }) => (
           <TouchableOpacity
-            key={index}
             style={[
               styles.materialCard,
               item.separado && styles.separadoCard,
@@ -665,13 +714,17 @@ export default function AlmoxarifadoScreen() {
                 setCodProdSelecionado(item.COD_MP);
                 setEndereco('');
                 setModalVisible(true);
+                handleItemPress(item)
               }
             }}
-            // disabled={!podeSepararItens || item.separado}
           >
             <View style={styles.materialHeader}>
-              <Text style={styles.materialValue}>{item.PRODUTOMP}</Text>
-              <Text style={styles.materialQuantity}>{item.QUANTIDADE}</Text>
+              <Text style={styles.materialValue}>{item.COD_MP} - {item.PRODUTOMP}</Text>
+            </View>
+            
+            <View style={styles.materialHeader}>
+              <Text style={styles.loteText}>Lote OP: {item.LOTE}</Text>
+              <Text style={styles.materialQuantity}>Qtd OP: {item.QUANTIDADE}</Text>
             </View>
 
             {item.separado && (
@@ -683,117 +736,241 @@ export default function AlmoxarifadoScreen() {
                 <View style={styles.separadoDetails}>
                   <Text style={styles.separadoDetail}>Qtd: {item.separado.QTDSEPARADA} </Text>
                   <Text style={styles.separadoDetail}>Por: {item.separado.USUARIO}</Text>
+                  {/* Exibir lote na separação concluída */}
+                  {/* <Text style={styles.separadoDetail}>Lote: {item.separado.LOTE}</Text> */}
                 </View>
               </View>
             )}
           </TouchableOpacity>
-        ))}
-      </ScrollView>
+        )}
+      />
 
-      {/* Modal para seleção de OP */}
-      <Modal visible={modalOpsVisible} animationType="slide" transparent>
-        <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', alignItems: 'center' }}>
-          <View style={{ backgroundColor: '#fff', padding: 20, borderRadius: 10, width: '90%', maxHeight: '80%' }}>
-            <Text style={{ fontWeight: 'bold', fontSize: 18, marginBottom: 10, textAlign: 'center' }}>
-              OPs Abertas em Embalagem
+    </ScrollView>
+
+    {/* Modal para seleção de OP */}
+    <Modal visible={modalOpsVisible} animationType="slide" transparent>
+      <View style={styles.modalOverlay}>
+        <View style={styles.modalContent}>
+          <Text style={styles.modalTitle}>
+            OPs Abertas em Embalagem
+          </Text>
+          
+          {loadingOps ? (
+            <ActivityIndicator size="large" color="#4CAF50" />
+          ) : opsAbertas.length > 0 ? (
+            <FlatList
+              data={opsAbertas}
+              keyExtractor={(item, index) => index.toString()}
+              style={styles.modalList}
+              renderItem={({ item }) => (
+                <TouchableOpacity
+                  style={styles.opItem}
+                  onPress={() => selecionarOP(item)}
+                >
+                  <Text style={styles.opText}>OP: {item.IDIPROC}</Text>
+                  <Text style={styles.opDetail}>Ref: {item.REFERENCIA}</Text>
+                  <Text style={styles.opDetail}>Produto: {item.PRODUTOPA}</Text>
+                  <Text style={styles.opDetail}>Lote: {item.LOTE}</Text>
+                </TouchableOpacity>
+              )}
+            />
+          ) : (
+            <Text style={styles.noDataText}>
+              Nenhuma OP aberta encontrada
             </Text>
-            
-            {loadingOps ? (
-              <ActivityIndicator size="large" color="#4CAF50" />
-            ) : opsAbertas.length > 0 ? (
-              <ScrollView>
-                {opsAbertas.map((op, index) => (
-                  <TouchableOpacity
-                    key={index}
-                    style={styles.opItem}
-                    onPress={() => selecionarOP(op)}
-                  >
-                    <Text style={styles.opText}>OP: {op.IDIPROC}</Text>
-                    <Text style={styles.opDetail}>Ref: {op.REFERENCIA}</Text>
-                    <Text style={styles.opDetail}>Produto: {op.PRODUTOPA}</Text>
-                    <Text style={styles.opDetail}>Lote: {op.LOTE}</Text>
-                  </TouchableOpacity>
-                ))}
+          )}
+          
+          {/* Botão para recarregar a lista */}
+          <TouchableOpacity
+            style={styles.reloadButton}
+            onPress={buscarOpsAbertas}
+          >
+            <Ionicons name="refresh" size={16} color="white" style={{ marginRight: 8 }} />
+            <Text style={styles.buttonText}>Recarregar Lista</Text>
+          </TouchableOpacity>
+          
+          <TouchableOpacity
+            style={styles.closeButton}
+            onPress={() => setModalOpsVisible(false)}
+          >
+            <Text style={styles.buttonText}>Fechar</Text>
+          </TouchableOpacity>
+        </View>
+      </View>
+    </Modal>
+
+    {/* Modal principal */}
+    <Modal visible={modalVisible} animationType="slide" transparent>
+      <View style={styles.modalOverlay}>
+        <View style={styles.modalContent}>
+          {loading ? (
+            <ActivityIndicator size="large" color="#4CAF50" />
+          ) : modalMode === 'confirmacao' ? (
+            /* VIEW DE CONFIRMAÇÃO */
+            dadosEndereco.length > 0 && dadosEndereco[0] ? (
+              <ScrollView style={styles.modalScrollView}>
+                <Text style={styles.modalTitle}>
+                  Confirmar Retirada
+                </Text>
+                
+                {/* Encontrar o itemOP dentro do modal */}
+                {(() => {
+                  const itemOPModal = dados.find(item => item.COD_MP === codProdSelecionado);
+                  return (
+                    <>
+                      <Text style={{ marginBottom: 8 }}>
+                        <Text style={{ fontWeight: 'bold' }}>Produto:</Text> {dadosEndereco[0][1]}
+                      </Text>
+                      <Text style={{ marginBottom: 8 }}>
+                        <Text style={{ fontWeight: 'bold' }}>Endereço:</Text> {dadosEndereco[0][2]}
+                      </Text>
+                      <Text style={{ marginBottom: 8 }}>
+                        <Text style={{ fontWeight: 'bold' }}>Lote OP:</Text> {itemOPModal?.LOTE || 'N/A'}
+                      </Text>
+                      <Text style={{ marginBottom: 16 }}>
+                        <Text style={{ fontWeight: 'bold' }}>Qtd OP:</Text> {itemOPModal?.QUANTIDADE || 'N/A'}
+                      </Text>
+
+                      <TextInput
+                        style={styles.input}
+                        placeholder="Digite o lote"
+                        value={loteRetirada}
+                        onChangeText={setLoteRetirada}
+                        autoCapitalize="characters"
+                      />
+
+                      <TextInput
+                        style={styles.input}
+                        placeholder={`Quantidade a retirar (${dadosEndereco[0][7]})`}
+                        keyboardType="numeric"
+                        value={quantidadeRetirada}
+                        onChangeText={setQuantidadeRetirada}
+                      />
+
+                      <TouchableOpacity
+                        style={[
+                          styles.confirmButton, 
+                          { 
+                            opacity: (quantidadeRetirada && loteRetirada) ? 1 : 0.5 
+                          }
+                        ]}
+                        onPress={confirmarRetirada}
+                        disabled={!quantidadeRetirada || !loteRetirada}
+                      >
+                        <Text style={styles.buttonText}>Confirmar Retirada</Text>
+                      </TouchableOpacity>
+
+                      <TouchableOpacity
+                        style={styles.backButton}
+                        onPress={() => {
+                          setModalMode('lista');
+                          setEndereco('');
+                          setQuantidadeRetirada('');
+                          setLoteRetirada('');
+                          buscarEnderecosProduto(codProdSelecionado!);
+                        }}
+                      >
+                        <Text style={styles.buttonText}>Voltar</Text>
+                      </TouchableOpacity>
+                    </>
+                  );
+                })()}
               </ScrollView>
             ) : (
-              <Text style={{ textAlign: 'center', marginVertical: 20 }}>
-                Nenhuma OP aberta encontrada
+              <View style={styles.warningContainer}>
+                <Ionicons name="warning" size={40} color="#ff9800" />
+                <Text style={styles.warningText}>Dados não disponíveis</Text>
+              </View>
+            )
+          ) : (
+            /* VIEW DE SELEÇÃO */
+            <ScrollView style={styles.modalScrollView}>
+              <Text style={styles.modalTitle}>
+                {dadosEndereco[0]?.[0] || 'Produto'} - {dadosEndereco[0]?.[1] || 'Produto'}
               </Text>
-            )}
-            
-            {/* Botão para recarregar a lista */}
-            <TouchableOpacity
-              style={{ marginTop: 10, backgroundColor: '#2196F3', padding: 10, borderRadius: 8, flexDirection: 'row', justifyContent: 'center', alignItems: 'center' }}
-              onPress={buscarOpsAbertas}
-            >
-              <Ionicons name="refresh" size={16} color="white" style={{ marginRight: 8 }} />
-              <Text style={{ color: '#fff', textAlign: 'center' }}>Recarregar Lista</Text>
-            </TouchableOpacity>
-            
-            <TouchableOpacity
-              style={{ marginTop: 10, backgroundColor: '#4CAF50', padding: 10, borderRadius: 8 }}
-              onPress={() => setModalOpsVisible(false)}
-            >
-              <Text style={{ color: '#fff', textAlign: 'center' }}>Fechar</Text>
-            </TouchableOpacity>
-          </View>
+                {/* Informações detalhadas do endereço selecionado */}
+                {detalhesEnderecoVisivel && enderecoSelecionado && (
+                  <View style={styles.detalhesEndereco}>
+                    <Text style={styles.detalhesTitulo}>Informações do Endereço:</Text>
+                      <FlatList
+                        data={dadosEndereco}
+                        keyExtractor={(item, index) => index.toString()}
+                        style={styles.enderecoList}
+                        scrollEnabled={false}
+                        renderItem={({ item }) => (
+                          <TouchableOpacity
+                            style={[
+                              styles.enderecoItem,
+                              enderecoSelecionado === item && styles.enderecoItemSelected
+                            ]}
+                            onPress={() => {
+                              setEnderecoSelecionado(item);
+                              setDetalhesEnderecoVisivel(true);
+                            }}
+                          >
+                            <Text style={styles.enderecoText}>📍 {item[2]}</Text>
+                          </TouchableOpacity>
+                        )}
+                      />
+                  </View>
+                )}
+
+              <Text style={{ fontWeight: 'bold', marginBottom: 8 }}>
+                Digite o endereço desejado:
+              </Text>
+              <TextInput
+                style={styles.input}
+                placeholder="Digite o endereço completo"
+                value={endereco}
+                onChangeText={setEndereco}
+                autoCapitalize="characters"
+              />
+
+              <TouchableOpacity
+                style={[styles.searchButton, { marginTop: 16, opacity: endereco ? 1 : 0.5 }]}
+                onPress={buscarEnderecoEspecifico}
+                disabled={!endereco}
+              >
+                <Text style={styles.searchButtonText}>Buscar Endereço</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={[
+                  styles.selectButton,
+                  { opacity: enderecoSelecionado ? 1 : 0.5 }
+                ]}
+                onPress={() => {
+                  if (enderecoSelecionado) {
+                    setDadosEndereco([enderecoSelecionado]);
+                    setModalMode('confirmacao');
+                  }
+                }}
+                disabled={!enderecoSelecionado}
+              >
+                <Text style={styles.buttonText}>Selecionar Endereço</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={styles.cancelButton}
+                onPress={() => {
+                  setModalVisible(false);
+                  setDadosEndereco([]);
+                  setEndereco('');
+                  setQuantidadeRetirada('');
+                  setLoteRetirada('');
+                  setDetalhesEnderecoVisivel(false);
+                  setEnderecoSelecionado(null);
+                }}
+              >
+                <Text style={styles.buttonText}>Cancelar</Text>
+              </TouchableOpacity>
+            </ScrollView>
+          )}
         </View>
-      </Modal>
-
-      <Modal visible={modalVisible} animationType="slide" transparent>
-        <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', alignItems: 'center' }}>
-          <View style={{ backgroundColor: '#fff', padding: 20, borderRadius: 10, width: '90%' }}>
-            {!dadosEndereco.length ? (
-              <>
-                <Text style={{ fontWeight: 'bold', fontSize: 18, marginBottom: 10 }}>Digite o endereço</Text>
-                <TextInput
-                  style={styles.input}
-                  placeholder="Endereço"
-                  value={endereco}
-                  onChangeText={setEndereco}
-                />
-                <TouchableOpacity style={styles.searchButton} onPress={buscarEndereco}>
-                  <Text style={styles.searchButtonText}>Buscar</Text>
-                </TouchableOpacity>
-              </>
-            ) : (
-              <>
-                <Text style={{ fontWeight: 'bold', fontSize: 18, marginBottom: 10 }}>Atualizar Estoque</Text>
-                <Text>Código do Produto: {dadosEndereco[0][0]}</Text>
-                <Text>Endereço: {dadosEndereco[0][2]}</Text>
-                <Text>Estoque Atual: {dadosEndereco[0][5]}</Text>
-
-                <TextInput
-                  style={[styles.input, { marginTop: 10 }]}
-                  placeholder="Quantidade a retirar"
-                  keyboardType="numeric"
-                  value={quantidadeRetirada}
-                  onChangeText={setQuantidadeRetirada}
-                />
-
-                <TouchableOpacity
-                  style={[styles.searchButton, { marginTop: 16 }]}
-                  onPress={confirmarRetirada}
-                >
-                  <Text style={styles.searchButtonText}>Confirmar Retirada</Text>
-                </TouchableOpacity>
-              </>
-            )}
-            <TouchableOpacity
-              style={{ marginTop: 10, backgroundColor: '#4CAF50', padding: 10, borderRadius: 8 }}
-              onPress={() => {
-                setModalVisible(false);
-                setDadosEndereco([]);
-                setQuantidadeRetirada('');
-              }}
-            >
-              <Text style={{ color: '#fff', textAlign: 'center' }}>Fechar</Text>
-            </TouchableOpacity>
-          </View>
-        </View>
-      </Modal>
-    </SafeAreaView>
-  );
+      </View>
+    </Modal>
+  </SafeAreaView>
+);
 }
 
 const styles = StyleSheet.create({
@@ -804,6 +981,11 @@ const styles = StyleSheet.create({
   scrollContent: {
     flexGrow: 1,
     paddingBottom: 20,
+  },
+   loteText: {
+    fontSize: 12,
+    color: '#666',
+    marginTop: 4,
   },
   header: {
     flexDirection: 'row',
@@ -979,5 +1161,145 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: '#666',
     marginTop: 2,
+  },
+   detalhesEndereco: {
+    backgroundColor: '#f0f8ff',
+    padding: 12,
+    borderRadius: 8,
+    marginBottom: 12,
+    borderWidth: 1,
+    borderColor: '#b8daff',
+  },
+  detalhesTitulo: {
+    fontWeight: 'bold',
+    fontSize: 16,
+    marginBottom: 8,
+    color: '#004085',
+  },
+  detalhesLinha: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginBottom: 4,
+  },
+  detalhesLabel: {
+    fontWeight: '600',
+    color: '#0056b3',
+  },
+  detalhesValor: {
+    color: '#004085',
+  },
+  enderecoItem: {
+    padding: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: '#ddd',
+    backgroundColor: '#f9f9f9',
+    marginBottom: 8,
+    borderRadius: 6,
+  },
+  enderecoItemSelected: {
+    backgroundColor: '#e3f2fd',
+    borderLeftWidth: 4,
+    borderLeftColor: '#2196F3',
+  },
+  enderecoText: {
+    fontWeight: 'bold',
+    fontSize: 14,
+    color: '#333',
+  },
+  enderecoDetail: {
+    fontSize: 12,
+    color: '#666',
+    marginTop: 2,
+  },
+    modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  modalContent: {
+    backgroundColor: '#fff',
+    padding: 20,
+    borderRadius: 10,
+    width: '90%',
+    maxHeight: '80%',
+  },
+  modalTitle: {
+    fontWeight: 'bold',
+    fontSize: 18,
+    marginBottom: 15,
+    textAlign: 'center',
+  },
+  modalScrollView: {
+    maxHeight: '100%',
+  },
+  modalList: {
+    maxHeight: 300,
+    marginBottom: 15,
+  },
+  enderecoList: {
+    maxHeight: 200,
+    marginBottom: 16,
+  },
+  noDataText: {
+    textAlign: 'center',
+    marginVertical: 20,
+    color: '#666',
+  },
+  reloadButton: {
+    marginTop: 10,
+    backgroundColor: '#2196F3',
+    padding: 12,
+    borderRadius: 8,
+    flexDirection: 'row',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  closeButton: {
+    marginTop: 10,
+    backgroundColor: '#4CAF50',
+    padding: 12,
+    borderRadius: 8,
+  },
+  confirmButton: {
+    marginTop: 16,
+    backgroundColor: '#4CAF50',
+    padding: 12,
+    borderRadius: 8,
+    alignItems: 'center',
+  },
+  backButton: {
+    marginTop: 10,
+    backgroundColor: '#ccc',
+    padding: 12,
+    borderRadius: 8,
+    alignItems: 'center',
+  },
+  selectButton: {
+    marginTop: 10,
+    backgroundColor: '#4CAF50',
+    padding: 12,
+    borderRadius: 8,
+    alignItems: 'center',
+  },
+  cancelButton: {
+    marginTop: 10,
+    backgroundColor: '#ccc',
+    padding: 12,
+    borderRadius: 8,
+    alignItems: 'center',
+  },
+  buttonText: {
+    color: '#fff',
+    fontWeight: 'bold',
+  },
+  warningContainer: {
+    alignItems: 'center',
+    padding: 20,
+  },
+  warningText: {
+    textAlign: 'center',
+    marginTop: 10,
+    color: '#666',
   },
 });
