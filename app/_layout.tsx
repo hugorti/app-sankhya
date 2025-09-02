@@ -119,16 +119,6 @@ export default function RootLayout() {
           }} 
         />
 
-        {/* Nova rota para o resumo da separação */}
-        <Stack.Screen 
-          name="resumoSeparacao" 
-          options={{ 
-            headerShown: false,
-            title: 'Resumo Separação',
-            animation: 'slide_from_right',
-            gestureEnabled: true
-          }} 
-        />
       </Stack>
     </GestureHandlerRootView>
   );

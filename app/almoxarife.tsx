@@ -218,58 +218,113 @@ const handleItemPress = async (item: any) => {
   };
 
   const handleFinalizarSeparacao = async () => {
-    if (!idiproc) {
-      Alert.alert('Erro', 'Por favor, informe o número da OP primeiro');
-      return;
-    }
+  if (!idiproc) {
+    Alert.alert('Erro', 'Por favor, informe o número da OP primeiro');
+    return;
+  }
 
-    Alert.alert(
-      'Confirmação',
-      'Tem certeza que deseja finalizar a separação? Você será redirecionado para criar o movimento.',
-      [
-        {
-          text: 'Cancelar',
-          style: 'cancel'
-        },
-        {
-          text: 'Confirmar',
-          onPress: async () => {
-            try {
-              setLoading(true);
-              
-              // 1. Primeiro finaliza a separação no sistema
-              await finalizarSeparacao({
-                IDIPROC: Number(idiproc),
-              });
-              
-              // 2. Atualiza o estado local
-              setSeparacaoFinalizada(true);
-              setPodeSepararItens(false);
-              
-              // 3. Navega para a tela de resumo
-              router.push({
-                pathname: '/resumoSeparacao',
-                params: {
-                  itensSeparados: JSON.stringify(dados.filter(item => item.separado)),
-                  idiproc: idiproc,
-                  codemp: '1', // Ajuste conforme necessário
-                  // Adicione outros parâmetros se necessário
-                  referencia: dados[0]?.REFERENCIA || '',
-                  produto: dados[0]?.PRODUTOMP || '',
-                }
-              });
+  Alert.alert(
+    'Confirmação',
+    'Tem certeza que deseja finalizar a separação? O movimento será criado automaticamente.',
+    [
+      {
+        text: 'Cancelar',
+        style: 'cancel'
+      },
+      {
+        text: 'Confirmar',
+        onPress: async () => {
+          try {
+            setLoading(true);
+            
+            // 1. Primeiro criar o movimento (nota fiscal)
+            const itensSeparados = dados.filter(item => item.separado);
+            
+            // Dados para criar a nota fiscal
+            const notaFiscalData = {
+              IDIPROC: Number(idiproc),
+              CODEMP: 1,
+              NUMNOTA: 0,
+              CODCENCUS: 109002,
+              CODTIPOPER: 1242,
+              TIPMOV: 'T',
+              CODTIPVENDA: 0,
+              CODNAT: 3010103
+            };
 
-            } catch (error) {
-              console.error('Erro ao finalizar separação:', error);
-              Alert.alert('Erro', error instanceof Error ? error.message : 'Falha ao finalizar separação');
-            } finally {
-              setLoading(false);
+            console.log('Criando nota fiscal com dados:', notaFiscalData);
+
+            const notaFiscalResponse = await criarNotaFiscal(notaFiscalData);
+            const nunota = notaFiscalResponse.nunota;
+
+            console.log('Nota fiscal criada com NUNOTA:', nunota);
+
+            // 2. Adicionar itens à nota fiscal
+            for (let i = 0; i < itensSeparados.length; i++) {
+              const item = itensSeparados[i];
+              const itemData = {
+                NUNOTA: nunota,
+                CODPROD: item.COD_MP,
+                QTDNEG: parseFloat(item.separado!.QTDSEPARADA),
+                SEQUENCIA: i + 1,
+                CODVOL: item.separado!.UNIDADE,
+                CODLOCALORIG: 50000000,
+                CODLOCALDEST: 60000000
+              };
+
+              console.log('Adicionando item:', itemData);
+              await adicionarItemNotaFiscal(itemData);
             }
+
+            // 3. Só depois de criar o movimento com sucesso, finalizar a separação
+            await finalizarSeparacao({
+              IDIPROC: Number(idiproc),
+            });
+            
+            // 4. Atualiza o estado local
+            setSeparacaoFinalizada(true);
+            setPodeSepararItens(false);
+            
+            Alert.alert('Sucesso', 'Movimento criado e separação finalizada com sucesso!');
+            
+            // 5. Voltar para tela anterior ou limpar dados
+            setDados([]);
+            setIdiproc('');
+
+          } catch (error: any) {
+            console.error('Erro ao finalizar separação:', error);
+            
+            // Tratamento específico para erro de estoque insuficiente
+            if (error.message && error.message.includes('ESTOQUE INSUFICIENTE')) {
+              const codProdMatch = error.message.match(/Produto: (\d+)/);
+              const quantidadeMatch = error.message.match(/Quantidade: (\d+)/);
+              
+              let mensagemErro = 'Estoque insuficiente!';
+              
+              if (codProdMatch && codProdMatch[1]) {
+                const codProd = codProdMatch[1];
+                const produtoComErro = dados.find(item => item.COD_MP.toString() === codProd);
+                const nomeProduto = produtoComErro ? produtoComErro.PRODUTOMP : `Código: ${codProd}`;
+                
+                mensagemErro = `Produto: ${nomeProduto}\nCódigo: ${codProd}`;
+                
+                if (quantidadeMatch && quantidadeMatch[1]) {
+                  mensagemErro += `\nQuantidade solicitada: ${quantidadeMatch[1]}`;
+                }
+              }
+              
+              Alert.alert('Estoque insuficiente!', mensagemErro);
+            } else {
+              Alert.alert('Erro', error instanceof Error ? error.message : 'Falha ao finalizar separação');
+            }
+          } finally {
+            setLoading(false);
           }
         }
-      ]
-    );
-  };
+      }
+    ]
+  );
+};
 
   const buscarEnderecosProduto = async (codProd: number) => {
     try {
@@ -781,20 +836,22 @@ const handleItemPress = async (item: any) => {
           )}
           
           {/* Botão para recarregar a lista */}
-          <TouchableOpacity
-            style={styles.reloadButton}
-            onPress={buscarOpsAbertas}
-          >
-            <Ionicons name="refresh" size={16} color="white" style={{ marginRight: 8 }} />
-            <Text style={styles.buttonText}>Recarregar Lista</Text>
-          </TouchableOpacity>
-          
-          <TouchableOpacity
-            style={styles.closeButton}
-            onPress={() => setModalOpsVisible(false)}
-          >
-            <Text style={styles.buttonText}>Fechar</Text>
-          </TouchableOpacity>
+          <View style={styles.reloadButton}>
+            <TouchableOpacity
+              style={styles.refreshButton}
+              onPress={buscarOpsAbertas}
+            >
+              <Ionicons name="refresh" size={16} color="white" style={{ marginRight: 8 }} />
+              <Text style={styles.buttonText}>Recarregar </Text>
+            </TouchableOpacity>
+            
+            <TouchableOpacity
+              style={styles.closeButton}
+              onPress={() => setModalOpsVisible(false)}
+            >
+              <Text style={styles.buttonText}>Fechar</Text>
+            </TouchableOpacity>
+          </View>
         </View>
       </View>
     </Modal>
@@ -1221,8 +1278,8 @@ const styles = StyleSheet.create({
     backgroundColor: '#fff',
     padding: 20,
     borderRadius: 10,
-    width: '90%',
-    maxHeight: '80%',
+    width: '95%',
+    maxHeight: '95%',
   },
   modalTitle: {
     fontWeight: 'bold',
@@ -1234,7 +1291,6 @@ const styles = StyleSheet.create({
     maxHeight: '100%',
   },
   modalList: {
-    maxHeight: 300,
     marginBottom: 15,
   },
   enderecoList: {
@@ -1247,13 +1303,20 @@ const styles = StyleSheet.create({
     color: '#666',
   },
   reloadButton: {
-    marginTop: 10,
-    backgroundColor: '#2196F3',
-    padding: 12,
+    padding: 2,
     borderRadius: 8,
     flexDirection: 'row',
-    justifyContent: 'center',
+    justifyContent: 'space-between',
     alignItems: 'center',
+  },
+  refreshButton: {
+    marginTop: 10,
+    display: 'flex',
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#000FFF',
+    padding: 12,
+    borderRadius: 8,
   },
   closeButton: {
     marginTop: 10,
