@@ -671,7 +671,7 @@ export const criarNotaFiscal = async (data: {
         },
         entity: {
           fieldset: {
-            list: "NUNOTA, TIPMOV, NUMNOTA, IDIPROC"
+            list: "IDIPROC"
           }
         }
       }
@@ -679,6 +679,7 @@ export const criarNotaFiscal = async (data: {
   };
 
   try {
+    // 1. Cria a nota
     const response = await api.post(
       'mge/service.sbr?serviceName=CRUDServiceProvider.saveRecord&outputType=json',
       requestBody,
@@ -689,18 +690,39 @@ export const criarNotaFiscal = async (data: {
       throw new Error(response.data.statusMessage || 'Erro ao criar nota fiscal');
     }
 
-    // Extrai o NUNOTA da resposta
-    const nunota = response.data.responseBody?.entity?.NUNOTA;
-    if (!nunota) {
-      throw new Error('NUNOTA não retornado na criação da nota fiscal');
-    }
-
-    return {
-      ...response.data.responseBody,
-      nunota: nunota
+    // 2. Consulta o NUNOTA pelo IDIPROC
+    const queryBody = {
+      serviceName: "DbExplorerSP.executeQuery",
+      requestBody: {
+        sql: `SELECT NUNOTA FROM TGFCAB WHERE IDIPROC = ${data.IDIPROC}`
+      }
     };
+
+    const queryResponse = await api.post(
+      'mge/service.sbr?serviceName=DbExplorerSP.executeQuery&outputType=json',
+      queryBody,
+      { headers: { 'Content-Type': 'application/json' } }
+    );
+
+    // Analisando a estrutura da resposta baseada no log de erro
+    const result = queryResponse.data.responseBody;
+    
+    if (result.rows && result.rows.length > 0) {
+      // A resposta vem como um array dentro de rows[0]
+      const nunota = result.rows[0][0]; // Primeiro elemento do primeiro array
+      
+      if (!nunota) {
+        console.error("Retorno consulta NUNOTA:", JSON.stringify(result, null, 2));
+        throw new Error("Não foi possível recuperar o NUNOTA da nota criada");
+      }
+
+      return { nunota };
+    } else {
+      console.error("Retorno consulta NUNOTA:", JSON.stringify(result, null, 2));
+      throw new Error("Nenhum registro encontrado para o IDIPROC");
+    }
   } catch (error) {
-    console.error('Error creating invoice:', error);
+    console.error("Erro ao criar nota fiscal:", error);
     throw error;
   }
 };
@@ -723,15 +745,13 @@ export const adicionarItemNotaFiscal = async (data: {
         includePresentationFields: "N",
         dataRow: {
           localFields: {
+            NUNOTA: { "$": data.NUNOTA },
             CODPROD: { "$": data.CODPROD },
             QTDNEG: { "$": data.QTDNEG },
             SEQUENCIA: { "$": data.SEQUENCIA },
             CODVOL: { "$": data.CODVOL },
             CODLOCALORIG: { "$": data.CODLOCALORIG },
             CODLOCALDEST: { "$": data.CODLOCALDEST }
-          },
-          key: {
-            NUNOTA: { "$": data.NUNOTA }
           }
         },
         entity: {
@@ -756,7 +776,7 @@ export const adicionarItemNotaFiscal = async (data: {
 
     return response.data.responseBody;
   } catch (error) {
-    console.error('Error adding item to invoice:', error);
+    // console.error('Erro ao adicionar item à nota fiscal:', error);
     throw error;
   }
 };

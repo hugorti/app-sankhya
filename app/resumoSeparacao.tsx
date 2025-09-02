@@ -37,11 +37,11 @@ export default function ResumoSeparacaoScreen() {
       IDIPROC: parseInt(idiproc),
       CODEMP: 1, // Valor fixo conforme mencionado
       NUMNOTA: 0, // Valor fixo conforme mencionado
-      CODCENCUS: 3010103, // Valor fixo conforme mencionado
+      CODCENCUS: 109002, // Valor fixo conforme mencionado
       CODTIPOPER: 1242, // Ajuste conforme necessário - valor comum para operações
       TIPMOV: 'T', // Transferencia
-      CODTIPVENDA: 1, // Valor padrão
-      CODNAT: 109002 // Valor fixo conforme mencionado
+      CODTIPVENDA: 0, // Valor padrão
+      CODNAT: 3010103 // Valor fixo conforme mencionado
     };
 
     console.log('Criando nota fiscal com dados:', notaFiscalData);
@@ -59,7 +59,7 @@ export default function ResumoSeparacaoScreen() {
         CODPROD: item.COD_MP,
         QTDNEG: item.separado.QTDSEPARADA,
         SEQUENCIA: i + 1,
-        CODVOL: 'UN', // Unidade
+        CODVOL: 'KG', // Unidade
         CODLOCALORIG: 50000000, // Valor padrão - ajuste se necessário
         CODLOCALDEST: 60000000 // Valor padrão - ajuste se necessário
       };
@@ -71,13 +71,42 @@ export default function ResumoSeparacaoScreen() {
     Alert.alert('Sucesso', 'Movimento criado com sucesso!');
     router.back();
     
-  } catch (error) {
-    console.error('Erro ao criar movimento:', error);
-    Alert.alert('Erro', 'Não foi possível criar o movimento. Verifique os logs para mais detalhes.');
+  }  catch (error: any) {
+    // console.error('Erro ao criar movimento:', error);
+    
+    // Tratamento específico para erro de estoque insuficiente
+    if (error.message && error.message.includes('ESTOQUE INSUFICIENTE')) {
+      // Extrair o código do produto da mensagem de erro
+      const codProdMatch = error.message.match(/Produto: (\d+)/);
+      const quantidadeMatch = error.message.match(/Quantidade: (\d+)/);
+      
+      let mensagemErro = 'Estoque insuficiente!';
+      
+      if (codProdMatch && codProdMatch[1]) {
+        const codProd = codProdMatch[1];
+        
+        // Encontrar o nome do produto pelo código
+        const produtoComErro = itensSeparados.find(item => item.COD_MP.toString() === codProd);
+        const nomeProduto = produtoComErro ? produtoComErro.PRODUTOMP : `Código: ${codProd}`;
+        
+        mensagemErro = `Produto: ${nomeProduto}\nCódigo: ${codProd}`;
+        
+        if (quantidadeMatch && quantidadeMatch[1]) {
+          mensagemErro += `\nQuantidade solicitada: ${quantidadeMatch[1]}`;
+        }
+      }
+      
+      Alert.alert('Estoque insuficiente!', mensagemErro);
+    } else if (error.message && error.message.includes('NUNOTA')) {
+      Alert.alert('Erro', 'Não foi possível criar a nota fiscal.');
+    } else {
+      Alert.alert('Erro', 'Não foi possível criar o movimento. Verifique os logs para mais detalhes.');
+    }
   } finally {
     setLoading(false);
   }
 };
+
 
   const totalItens = itensSeparados.length;
   const totalQuantidade = itensSeparados.reduce((total, item) => total + item.separado.QTDSEPARADA, 0);
