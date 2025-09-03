@@ -897,12 +897,32 @@ const handleItemPress = async (item: any) => {
                       />
 
                       <TextInput
-                        style={styles.input}
-                        placeholder={`Quantidade a retirar (${dadosEndereco[0][7]})`}
-                        keyboardType="numeric"
-                        value={quantidadeRetirada}
-                        onChangeText={setQuantidadeRetirada}
-                      />
+                          style={styles.input}
+                          placeholder={`Quantidade a retirar (${dadosEndereco[0][7]})`}
+                          keyboardType="numeric"
+                          value={quantidadeRetirada}
+                          onChangeText={(text) => {
+                            // Substitui vírgula por ponto
+                            let formattedText = text.replace(',', '.');
+                            
+                            // Remove caracteres não numéricos exceto ponto
+                            formattedText = formattedText.replace(/[^0-9.]/g, '');
+                            
+                            // Permite apenas um ponto decimal
+                            const parts = formattedText.split('.');
+                            if (parts.length > 2) {
+                              formattedText = parts[0] + '.' + parts.slice(1).join('');
+                            }
+                            
+                            // Limita a 3 casas decimais
+                            if (parts.length === 2 && parts[1].length > 3) {
+                              formattedText = parts[0] + '.' + parts[1].substring(0, 3);
+                            }
+                            
+                            setQuantidadeRetirada(formattedText);
+                          }}
+                        />
+
 
                       <TouchableOpacity
                         style={[
