@@ -71,6 +71,11 @@ export default function AlmoxarifadoScreen() {
   const [loteRetirada, setLoteRetirada] = useState('');
   const [estoqueTotal, setEstoqueTotal] = useState<string>('0');
 
+  const [ideiAtv, setIdeiAtv] = useState<number | null>(null);
+  const [idiAtv, setIdiAtv] = useState<number | null>(null);
+
+  const [inicioTimestamp, setInicioTimestamp] = useState<number | null>(null);
+
   // Buscar OPs abertas ao abrir a tela
   useEffect(() => {
     buscarOpsAbertas();
@@ -182,45 +187,58 @@ const handleItemPress = async (item: any) => {
   };
 
   const handleIniciarSeparacao = async () => {
-    if (!idiproc) {
-      Alert.alert('Erro', 'Por favor, informe o número da OP primeiro');
-      return;
-    }
-
-    Alert.alert(
-      'Confirmação',
-      'Tem certeza que deseja iniciar a separação?',
-      [
-        {
-          text: 'Cancelar',
-          style: 'cancel'
-        },
-        {
-          text: 'Confirmar',
-          onPress: async () => {
-            try {
-              setLoading(true);
-              await iniciarSeparacao({
-                IDIPROC: Number(idiproc),
-              });
-              setSeparacaoIniciada(true);
-              setPodeSepararItens(true);
-              Alert.alert('Sucesso', 'Separação iniciada com sucesso!');
-            } catch (error) {
-              console.error('Erro ao iniciar separação:', error);
-              Alert.alert('Erro', error instanceof Error ? error.message : 'Falha ao iniciar separação');
-            } finally {
-              setLoading(false);
-            }
-          }
-        }
-      ]
-    );
-  };
-
-  const handleFinalizarSeparacao = async () => {
   if (!idiproc) {
     Alert.alert('Erro', 'Por favor, informe o número da OP primeiro');
+    return;
+  }
+
+  Alert.alert(
+    'Confirmação',
+    'Tem certeza que deseja iniciar a separação?',
+    [
+      {
+        text: 'Cancelar',
+        style: 'cancel'
+      },
+      {
+        text: 'Confirmar',
+        onPress: async () => {
+          try {
+            setLoading(true);
+            const resultado = await iniciarSeparacao({
+              IDIPROC: Number(idiproc),
+              username: session?.username || '' // Adicionando username
+            });
+            
+            // Armazenar IDEIATV, IDIATV e inicioTimestamp para usar no finalizar
+            setIdeiAtv(resultado.IDEIATV);
+            setIdiAtv(resultado.IDIATV);
+            setInicioTimestamp(resultado.inicioTimestamp); // Armazenar timestamp
+            
+            setSeparacaoIniciada(true);
+            setPodeSepararItens(true);
+            Alert.alert('Sucesso', 'Separação iniciada com sucesso!');
+          } catch (error) {
+            console.error('Erro ao iniciar separação:', error);
+            Alert.alert('Erro', error instanceof Error ? error.message : 'Falha ao iniciar separação');
+          } finally {
+            setLoading(false);
+          }
+        }
+      }
+    ]
+  );
+};
+
+const handleFinalizarSeparacao = async () => {
+  if (!idiproc) {
+    Alert.alert('Erro', 'Por favor, informe o número da OP primeiro');
+    return;
+  }
+
+  // Verificar se temos os IDs necessários
+  if (!ideiAtv || !idiAtv || !inicioTimestamp) {
+    Alert.alert('Erro', 'Dados de separação incompletos. Reinicie o processo.');
     return;
   }
 
@@ -248,6 +266,7 @@ const handleItemPress = async (item: any) => {
               NUMNOTA: 0,
               CODCENCUS: 109002,
               CODTIPOPER: 1242,
+              STATUSNOTA: 'L',
               TIPMOV: 'T',
               CODTIPVENDA: 0,
               CODNAT: 3010103
@@ -260,43 +279,62 @@ const handleItemPress = async (item: any) => {
 
             console.log('Nota fiscal criada com NUNOTA:', nunota);
 
-            // 2. Adicionar itens à nota fiscal
+            // 2. Buscar a próxima sequência disponível para evitar duplicação
+            const proximaSequencia = await buscarProximaSequencia(nunota);
+            console.log('Próxima sequência disponível:', proximaSequencia);
+
+            // 3. Adicionar itens à nota fiscal com sequência correta
             for (let i = 0; i < itensSeparados.length; i++) {
               const item = itensSeparados[i];
               const itemData = {
                 NUNOTA: nunota,
                 CODPROD: item.COD_MP,
                 QTDNEG: parseFloat(item.separado!.QTDSEPARADA),
-                SEQUENCIA: i + 1,
+                SEQUENCIA: proximaSequencia + i, // Usar sequência incremental a partir da disponível
                 CODVOL: item.separado!.UNIDADE,
                 CODLOCALORIG: 50000000,
-                CODLOCALDEST: 60000000
+                CODLOCALDEST: 60000000,
+                PENDENTE: 'N'
               };
 
               console.log('Adicionando item:', itemData);
               await adicionarItemNotaFiscal(itemData);
             }
 
-            // 3. Só depois de criar o movimento com sucesso, finalizar a separação
+            // 4. Só depois de criar o movimento com sucesso, finalizar a separação
             await finalizarSeparacao({
               IDIPROC: Number(idiproc),
+              username: session?.username || '',
+              IDEIATV: ideiAtv,
+              IDIATV: idiAtv,
+              inicioTimestamp: inicioTimestamp
             });
             
-            // 4. Atualiza o estado local
+            // 5. Atualiza o estado local
             setSeparacaoFinalizada(true);
             setPodeSepararItens(false);
             
             Alert.alert('Sucesso', 'Movimento criado e separação finalizada com sucesso!');
             
-            // 5. Voltar para tela anterior ou limpar dados
+            // 6. Voltar para tela anterior ou limpar dados
             setDados([]);
             setIdiproc('');
+            setIdeiAtv(null);
+            setIdiAtv(null);
+            setInicioTimestamp(null);
 
           } catch (error: any) {
             console.error('Erro ao finalizar separação:', error);
             
+            // Tratamento específico para erro de chave duplicada
+            if (error.message && error.message.includes('Violação da restrição PRIMARY KEY')) {
+              Alert.alert(
+                'Erro de duplicidade', 
+                'Já existe um movimento para esta OP. Por favor, verifique no sistema.'
+              );
+            } 
             // Tratamento específico para erro de estoque insuficiente
-            if (error.message && error.message.includes('ESTOQUE INSUFICIENTE')) {
+            else if (error.message && error.message.includes('ESTOQUE INSUFICIENTE')) {
               const codProdMatch = error.message.match(/Produto: (\d+)/);
               const quantidadeMatch = error.message.match(/Quantidade: (\d+)/);
               
@@ -325,6 +363,22 @@ const handleItemPress = async (item: any) => {
       }
     ]
   );
+};
+
+// Função para buscar a próxima sequência disponível
+const buscarProximaSequencia = async (nunota: number): Promise<number> => {
+  try {
+    const sql = `SELECT COALESCE(MAX(SEQUENCIA), 0) + 1 AS PROXIMA_SEQUENCIA FROM TGFITE WHERE NUNOTA = ${nunota}`;
+    const result = await queryJson('DbExplorerSP.executeQuery', { sql });
+    
+    if (result.rows.length > 0) {
+      return result.rows[0][0];
+    }
+    return 1; // Se não houver itens, começa com 1
+  } catch (error) {
+    console.error('Erro ao buscar próxima sequência:', error);
+    return 1; // Fallback para sequência 1
+  }
 };
 
  const buscarEnderecosProduto = async (codProd: number) => {

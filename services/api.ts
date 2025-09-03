@@ -459,63 +459,136 @@ const buscarIdiAtvEmbalagem = async (idiproc: number): Promise<number | null> =>
   }
 };
 
+// Função auxiliar para buscar CODUSU
+export const buscarCodUsu = async (username: string): Promise<number> => {
+  try {
+    const sql = `SELECT CODUSU FROM TSIUSU WHERE NOMEUSU = '${username}'`;
+    const result = await queryJson('DbExplorerSP.executeQuery', { sql });
+    
+    if (result.rows.length > 0) {
+      return result.rows[0][0];
+    } else {
+      throw new Error('Usuário não encontrado na tabela TSIUSU');
+    }
+  } catch (error) {
+    console.error('Erro ao buscar CODUSU:', error);
+    throw error;
+  }
+};
+
 export const iniciarSeparacao = async (data: {
   IDIPROC: number;
-  // IDEFX: number;
+  username: string;
 }): Promise<any> => {
-  // Buscar o IDIATV da operação de EMBALAGEM
-  const idiAtv = await buscarIdiAtvEmbalagem(data.IDIPROC);
-  
-  if (!idiAtv) {
-    throw new Error('Não foi encontrada atividade de EMBALAGEM para esta OP');
-  }
+  try {
+    // Buscar o CODUSU com base no username
+    const codUsu = await buscarCodUsu(data.username);
+    
+    // Buscar o IDIATV da operação de EMBALAGEM
+    const idiAtv = await buscarIdiAtvEmbalagem(data.IDIPROC);
+    
+    if (!idiAtv) {
+      throw new Error('Não foi encontrada atividade de EMBALAGEM para esta OP');
+    }
 
-  // Formatar data e hora atual no formato DD/MM/YYYY HH:MM
-  const now = new Date();
-  const day = String(now.getDate()).padStart(2, '0');
-  const month = String(now.getMonth() + 1).padStart(2, '0');
-  const year = now.getFullYear();
-  const hours = String(now.getHours()).padStart(2, '0');
-  const minutes = String(now.getMinutes()).padStart(2, '0');
-  const dataHora = `${day}/${month}/${year} ${hours}:${minutes}`;
+    // Formatar data e hora atual no formato DD/MM/YYYY HH:MM
+    const now = new Date();
+    const day = String(now.getDate()).padStart(2, '0');
+    const month = String(now.getMonth() + 1).padStart(2, '0');
+    const year = now.getFullYear();
+    const hours = String(now.getHours()).padStart(2, '0');
+    const minutes = String(now.getMinutes()).padStart(2, '0');
+    const dataHora = `${day}/${month}/${year} ${hours}:${minutes}`;
 
-  const requestBody = {
-    serviceName: "CRUDServiceProvider.saveRecord",
-    requestBody: {
-      dataSet: {
-        rootEntity: "InstanciaAtividade",
-        includePresentationFields: "N",
-        dataRow: {
-          localFields: {
-            IDIPROC: { "$": data.IDIPROC },
-            // IDEFX: { "$": data.IDEFX },
-            DHINICIO: { "$": dataHora }
+    // PRIMEIRO: Criar DHINICIO na InstanciaAtividade
+    const requestBodyInstancia = {
+      serviceName: "CRUDServiceProvider.saveRecord",
+      requestBody: {
+        dataSet: {
+          rootEntity: "InstanciaAtividade",
+          includePresentationFields: "N",
+          dataRow: {
+            localFields: {
+              IDIPROC: { "$": data.IDIPROC },
+              DHINICIO: { "$": dataHora },
+              CODUSU: { "$": codUsu }, 
+              CODULTEXEC: { "$": codUsu }, 
+            },
+            key: {
+              IDIATV: { "$": idiAtv }
+            }
           },
-          key: {
-            IDIATV: { "$": idiAtv }
-          }
-        },
-        entity: {
-          fieldset: {
-            list: "IDIPROC, DHINICIO"
+          entity: {
+            fieldset: {
+              list: "IDIPROC, DHINICIO, CODUSU, CODULTEXEC"
+            }
           }
         }
       }
-    }
-  };
+    };
 
-  try {
-    const response = await api.post(
+    // Executar primeira requisição para InstanciaAtividade
+    const responseInstancia = await api.post(
       'mge/service.sbr?serviceName=CRUDServiceProvider.saveRecord&outputType=json',
-      requestBody,
+      requestBodyInstancia,
       { headers: { 'Content-Type': 'application/json' } }
     );
 
-    if (response.data.status !== "1") {
-      throw new Error(response.data.statusMessage || 'Erro ao iniciar separação');
+    if (responseInstancia.data.status !== "1") {
+      throw new Error(responseInstancia.data.statusMessage || 'Erro ao iniciar separação na InstanciaAtividade');
     }
 
-    return response.data.responseBody;
+    // Armazenar o timestamp de início para cálculo do tempo gasto
+    const inicioTimestamp = now.getTime();
+
+    // SEGUNDO: Criar ExecucaoAtividade com os mesmos dados da Instancia
+    const requestBodyExecucao = {
+      serviceName: "CRUDServiceProvider.saveRecord",
+      requestBody: {
+        dataSet: {
+          rootEntity: "ExecucaoAtividade",
+          includePresentationFields: "N",
+          dataRow: {
+            localFields: {
+              DHINICIO: { "$": dataHora }, // Mesmo DHINICIO da Instancia
+              IDIATV: { "$": idiAtv },     // Mesmo IDIATV da Instancia
+              CODEXEC: { "$": codUsu },    // CODUSU obtido da TSIUSU
+              CODUSU: { "$": codUsu },     // CODUSU obtido da TSIUSU
+              TIPO: { "$": "N" },          // Indicando que a execução foi finalizada
+              CODMTP: { "$": 0 }           // Código do motivo de finalização (0 = Normal)
+            }
+          },
+          entity: {
+            fieldset: {
+              list: "IDIATV, DHINICIO, CODEXEC, CODUSU, TIPO, CODMTP"
+            }
+          }
+        }
+      }
+    };
+
+    // Executar segunda requisição para ExecucaoAtividade
+    const responseExecucao = await api.post(
+      'mge/service.sbr?serviceName=CRUDServiceProvider.saveRecord&outputType=json',
+      requestBodyExecucao,
+      { headers: { 'Content-Type': 'application/json' } }
+    );
+
+    if (responseExecucao.data.status !== "1") {
+      throw new Error(responseExecucao.data.statusMessage || 'Erro ao criar ExecucaoAtividade');
+    }
+
+    // Retornar o IDEIATV gerado e o IDIATV para usar no finalizar
+    const ideiAtv = responseExecucao.data.responseBody.entities.entity.IDEIATV.$;
+    return {
+      instanciaAtividade: responseInstancia.data.responseBody,
+      execucaoAtividade: responseExecucao.data.responseBody,
+      IDEIATV: ideiAtv,
+      IDIATV: idiAtv,
+      CODUSU: codUsu,
+      inicioTimestamp: inicioTimestamp // Armazenar timestamp para cálculo posterior
+    };
+
   } catch (error) {
     console.error('Error starting separation:', error);
     throw error;
@@ -524,61 +597,120 @@ export const iniciarSeparacao = async (data: {
 
 export const finalizarSeparacao = async (data: {
   IDIPROC: number;
-  // IDEFX: number;
+  username: string;
+  IDEIATV: number;
+  IDIATV: number;
+  inicioTimestamp: number; // Receber o timestamp do início
 }): Promise<any> => {
-  // Buscar o IDIATV da operação de EMBALAGEM
-  const idiAtv = await buscarIdiAtvEmbalagem(data.IDIPROC);
-  
-  if (!idiAtv) {
-    throw new Error('Não foi encontrada atividade de EMBALAGEM para esta OP');
-  }
+  try {
+    // Buscar o CODUSU com base no username
+    const codUsu = await buscarCodUsu(data.username);
+    
+    // Buscar o IDIATV da operação de EMBALAGEM (como fallback)
+    const idiAtv = data.IDIATV || await buscarIdiAtvEmbalagem(data.IDIPROC);
+    
+    if (!idiAtv) {
+      throw new Error('Não foi encontrada atividade de EMBALAGEM para esta OP');
+    }
 
-  // Formatar data e hora atual no formato DD/MM/YYYY HH:MM
-  const now = new Date();
-  const day = String(now.getDate()).padStart(2, '0');
-  const month = String(now.getMonth() + 1).padStart(2, '0');
-  const year = now.getFullYear();
-  const hours = String(now.getHours()).padStart(2, '0');
-  const minutes = String(now.getMinutes()).padStart(2, '0');
-  const dataHora = `${day}/${month}/${year} ${hours}:${minutes}`;
+    // Formatar data e hora atual no formato DD/MM/YYYY HH:MM
+    const now = new Date();
+    const day = String(now.getDate()).padStart(2, '0');
+    const month = String(now.getMonth() + 1).padStart(2, '0');
+    const year = now.getFullYear();
+    const hours = String(now.getHours()).padStart(2, '0');
+    const minutes = String(now.getMinutes()).padStart(2, '0');
+    const dataHora = `${day}/${month}/${year} ${hours}:${minutes}`;
 
-  const requestBody = {
-    serviceName: "CRUDServiceProvider.saveRecord",
-    requestBody: {
-      dataSet: {
-        rootEntity: "InstanciaAtividade",
-        includePresentationFields: "N",
-        dataRow: {
-          localFields: {
-            IDIPROC: { "$": data.IDIPROC },
-            // IDEFX: { "$": data.IDEFX },
-            DHFINAL: { "$": dataHora }
+    // Calcular o tempo gasto em minutos (arredondando para baixo)
+    const tempoGastoMs = now.getTime() - data.inicioTimestamp;
+    const tempoGastoMin = Math.floor(tempoGastoMs / (1000 * 60));
+
+    // PRIMEIRO: Finalizar InstanciaAtividade
+    const requestBodyInstancia = {
+      serviceName: "CRUDServiceProvider.saveRecord",
+      requestBody: {
+        dataSet: {
+          rootEntity: "InstanciaAtividade",
+          includePresentationFields: "N",
+          dataRow: {
+            localFields: {
+              IDIPROC: { "$": data.IDIPROC },
+              DHFINAL: { "$": dataHora },
+              CODUSUFIN: { "$": codUsu }, 
+              CODULTEXEC: { "$": codUsu },
+              TEMPOGASTOMIN: { "$": tempoGastoMin } // Tempo gasto em minutos
+            },
+            key: {
+              IDIATV: { "$": idiAtv }
+            }
           },
-          key: {
-            IDIATV: { "$": idiAtv }
-          }
-        },
-        entity: {
-          fieldset: {
-            list: "IDIPROC, DHFINAL"
+          entity: {
+            fieldset: {
+              list: "IDIPROC, DHFINAL, CODUSUFIN, CODULTEXEC, TEMPOGASTOMIN"
+            }
           }
         }
       }
-    }
-  };
+    };
 
-  try {
-    const response = await api.post(
+    // SEGUNDO: Finalizar ExecucaoAtividade
+    const requestBodyExecucao = {
+      serviceName: "CRUDServiceProvider.saveRecord",
+      requestBody: {
+        dataSet: {
+          rootEntity: "ExecucaoAtividade",
+          includePresentationFields: "N",
+          dataRow: {
+            localFields: {
+              DHFINAL: { "$": dataHora }, // Mesmo DHFINAL da Instancia
+              CODEXEC: { "$": codUsu },   // CODUSU obtido da TSIUSU
+              CODUSU: { "$": codUsu },    // CODUSU obtido da TSIUSU
+              TIPO: { "$": "N" },         // Indicando que a execução foi finalizada
+              CODMTP: { "$": 0 }          // Código do motivo de finalização (0 = Normal)
+            },
+            key: {
+              IDEIATV: { "$": data.IDEIATV }
+            }
+          },
+          entity: {
+            fieldset: {
+              list: "IDEIATV, DHFINAL, CODEXEC, CODUSU, TIPO, CODMTP"
+            }
+          }
+        }
+      }
+    };
+
+    // Finalizar InstanciaAtividade
+    const responseInstancia = await api.post(
       'mge/service.sbr?serviceName=CRUDServiceProvider.saveRecord&outputType=json',
-      requestBody,
+      requestBodyInstancia,
       { headers: { 'Content-Type': 'application/json' } }
     );
 
-    if (response.data.status !== "1") {
-      throw new Error(response.data.statusMessage || 'Erro ao finalizar separação');
+    if (responseInstancia.data.status !== "1") {
+      throw new Error(responseInstancia.data.statusMessage || 'Erro ao finalizar InstanciaAtividade');
     }
 
-    return response.data.responseBody;
+    // Finalizar ExecucaoAtividade
+    const responseExecucao = await api.post(
+      'mge/service.sbr?serviceName=CRUDServiceProvider.saveRecord&outputType=json',
+      requestBodyExecucao,
+      { headers: { 'Content-Type': 'application/json' } }
+    );
+
+    if (responseExecucao.data.status !== "1") {
+      throw new Error(responseExecucao.data.statusMessage || 'Erro ao finalizar ExecucaoAtividade');
+    }
+
+    return {
+      instanciaAtividade: responseInstancia.data.responseBody,
+      execucaoAtividade: responseExecucao.data.responseBody,
+      CODUSU: codUsu,
+      tempoGastoMin: tempoGastoMin // Retornando o tempo gasto
+    };
+
   } catch (error) {
     console.error('Error finishing separation:', error);
     throw error;
@@ -648,6 +780,7 @@ export const criarNotaFiscal = async (data: {
   CODCENCUS: number;
   CODTIPOPER: number;
   TIPMOV: string;
+  STATUSNOTA: string;
   CODTIPVENDA: number;
   CODNAT: number;
 }): Promise<any> => {
@@ -662,6 +795,7 @@ export const criarNotaFiscal = async (data: {
             IDIPROC: { "$": data.IDIPROC },
             CODEMP: { "$": data.CODEMP },
             NUMNOTA: { "$": data.NUMNOTA },
+            STATUSNOTA: { "$": data.STATUSNOTA },
             CODCENCUS: { "$": data.CODCENCUS },
             CODTIPOPER: { "$": data.CODTIPOPER },
             TIPMOV: { "$": data.TIPMOV },

@@ -8,6 +8,7 @@ interface SankhyaSession {
   idusu: string;
   callID: string;
   username: string;
+  codusu?: string;
   timestamp: number;
 }
 
