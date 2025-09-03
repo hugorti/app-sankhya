@@ -69,6 +69,7 @@ export default function AlmoxarifadoScreen() {
   const [enderecoSelecionado, setEnderecoSelecionado] = useState<any>(null);
 
   const [loteRetirada, setLoteRetirada] = useState('');
+  const [estoqueTotal, setEstoqueTotal] = useState<string>('0');
 
   // Buscar OPs abertas ao abrir a tela
   useEffect(() => {
@@ -326,48 +327,61 @@ const handleItemPress = async (item: any) => {
   );
 };
 
-  const buscarEnderecosProduto = async (codProd: number) => {
-    try {
-      setLoading(true);
-      const sql = `
-        SELECT 
-          EXP.CODPROD,
-          PRO.DESCRPROD,
-          ED.ENDERECO,
-          ED.CODEND,
-          VOA.QUANTIDADE,
-          EST.ESTOQUE,
-          EST.ESTOQUEVOLPAD,
-          EST.CODVOL
-        FROM TGWEXP EXP
-        LEFT JOIN TGWEND ED ON ED.CODEND = EXP.CODEND
-        JOIN TGFPRO PRO ON PRO.CODPROD = EXP.CODPROD
-        LEFT JOIN TGWEST EST ON EST.CODPROD = EXP.CODPROD AND EST.CODEND = EXP.CODEND
-        LEFT JOIN TGFVOA VOA ON VOA.CODPROD = EXP.CODPROD AND VOA.CODVOL = EST.CODVOL
-        WHERE EXP.CODPROD = ${codProd}
-        ORDER BY ED.ENDERECO
-      `;
-      
-      const res = await queryJson('DbExplorerSP.executeQuery', { sql });
-      if (res.rows.length > 0) {
-        setDadosEndereco(res.rows);
-        setEndereco('');
-        setModalMode('lista');
-        setModalVisible(true);
-        
-        // Mostrar automaticamente os detalhes do primeiro endereço
-        setEnderecoSelecionado(res.rows[0]);
-        setDetalhesEnderecoVisivel(true);
-      } else {
-        Alert.alert('Aviso', 'Nenhum endereço encontrado para este produto');
-      }
-    } catch (err) {
-      console.error('Erro ao buscar endereços:', err);
-      Alert.alert('Erro', 'Erro ao buscar endereços do produto');
-    } finally {
-      setLoading(false);
+ const buscarEnderecosProduto = async (codProd: number) => {
+  try {
+    setLoading(true);
+    const sql = `
+      SELECT 
+        EXP.CODPROD,
+        PRO.DESCRPROD,
+        ED.ENDERECO,
+        ED.CODEND,
+        VOA.QUANTIDADE,
+        EST.ESTOQUE,
+        EST.ESTOQUEVOLPAD,
+        EST.CODVOL
+      FROM TGWEXP EXP
+      LEFT JOIN TGWEND ED ON ED.CODEND = EXP.CODEND
+      JOIN TGFPRO PRO ON PRO.CODPROD = EXP.CODPROD
+      LEFT JOIN TGWEST EST ON EST.CODPROD = EXP.CODPROD AND EST.CODEND = EXP.CODEND
+      LEFT JOIN TGFVOA VOA ON VOA.CODPROD = EXP.CODPROD AND VOA.CODVOL = EST.CODVOL
+      WHERE EXP.CODPROD = ${codProd}
+      ORDER BY ED.ENDERECO
+    `;
+    
+    const res = await queryJson('DbExplorerSP.executeQuery', { sql });
+    
+    // Buscar o estoque total do produto - manter como string para preservar casas decimais
+    const sqlEstoque = `SELECT SUM(ESTOQUE) as TOTAL_ESTOQUE FROM TGFEST WHERE CODPROD = ${codProd}`;
+    const resultEstoque = await queryJson('DbExplorerSP.executeQuery', { sql: sqlEstoque });
+    
+    let estoqueTotalStr = '0';
+    if (resultEstoque.rows.length > 0 && resultEstoque.rows[0][0] !== null) {
+      // Manter como string para preservar o formato com casas decimais
+      estoqueTotalStr = resultEstoque.rows[0][0].toString();
     }
-  };
+    setEstoqueTotal(estoqueTotalStr);
+    
+    if (res.rows.length > 0) {
+      setDadosEndereco(res.rows);
+      setEndereco('');
+      setModalMode('lista');
+      setModalVisible(true);
+      
+      // Mostrar automaticamente os detalhes do primeiro endereço
+      setEnderecoSelecionado(res.rows[0]);
+      setDetalhesEnderecoVisivel(true);
+    } else {
+      Alert.alert('Aviso', 'Nenhum endereço encontrado para este produto');
+    }
+  } catch (err) {
+    console.error('Erro ao buscar endereços:', err);
+    Alert.alert('Erro', 'Erro ao buscar endereços do produto');
+  } finally {
+    setLoading(false);
+  }
+};
+
 
   const buscarEnderecoEspecifico = async () => {
     if (!endereco.trim() || !codProdSelecionado) return;
@@ -420,18 +434,21 @@ const handleItemPress = async (item: any) => {
   const codProd = d[0];
   const descricaoProduto = d[1];
   
-  // Extrair a quantidade numérica
-  const quantidadeMatch = itemOP.QUANTIDADE.match(/(\d+\.?\d*)/);
-  const quantidadeOPNumerica = quantidadeMatch ? parseFloat(quantidadeMatch[1]) : 0;
-  const quantidadeOP = quantidadeOPNumerica.toString();
+  // MANTER A QUANTIDADE ORIGINAL DA OP (com casas decimais)
+  // Extrair a parte numérica e a unidade separadamente
+  const quantidadeMatch = itemOP.QUANTIDADE.match(/(\d+[,.]?\d*)\s*([a-zA-Z]*)/);
   
-  // Extrair a unidade
-  const unidadeMatch = itemOP.QUANTIDADE.match(/[a-zA-Z]+$/);
-  const codVol = unidadeMatch ? unidadeMatch[0] : itemOP.UNIDADE || 'UN';
+  // Converter vírgula para ponto para o cálculo numérico
+  const quantidadeOPString = quantidadeMatch ? quantidadeMatch[1].replace(',', '.') : '0';
+  const quantidadeOPNumerica = parseFloat(quantidadeOPString) || 0;
+  const unidadeOP = quantidadeMatch ? quantidadeMatch[2] : itemOP.UNIDADE || 'UN';
+  
+  // Manter a string original para exibição e registro
+  const quantidadeOPOriginal = itemOP.QUANTIDADE;
   
   const qtdRetirar = quantidadeRetirada;
   const usuario = session?.username || "Usuário";
-  const lote = loteRetirada || itemOP.LOTE; // Usar o lote digitado ou o lote da OP
+  const lote = loteRetirada || itemOP.LOTE;
 
   if (!qtdRetirar) {
     Alert.alert('Erro', 'Quantidade inválida');
@@ -443,15 +460,54 @@ const handleItemPress = async (item: any) => {
     return;
   }
 
+  // Validar se tem exatamente 3 casas decimais
+  const parts = qtdRetirar.split('.');
+  if (parts.length === 2 && parts[1].length !== 3) {
+    Alert.alert(
+      'Formato incorreto',
+      `A quantidade deve ter exatamente 3 casas decimais após o ponto.\nExemplo: 1.123`
+    );
+    return;
+  }
+
+  // Converter a quantidade retirada para número (já está com ponto)
   const qtdRetirarNumerica = parseFloat(qtdRetirar);
 
-  if (qtdRetirarNumerica <= 0) {
+  if (isNaN(qtdRetirarNumerica) || qtdRetirarNumerica <= 0) {
     Alert.alert('Erro', 'A quantidade deve ser maior que zero');
     return;
   }
 
+  // Comparação CORRETA com casas decimais (ambos convertidos para número com ponto)
   if (qtdRetirarNumerica < quantidadeOPNumerica) {
-    Alert.alert('Erro', `Quantidade solicitada (${qtdRetirar}) é menor que a quantidade da OP (${quantidadeOPNumerica})`);
+    Alert.alert(
+      'Erro', 
+      `Quantidade solicitada (${qtdRetirar}) é menor que a quantidade da OP (${quantidadeOPOriginal})`
+    );
+    return;
+  }
+
+  // VERIFICAR ESTOQUE DISPONÍVEL
+  try {
+    const sqlEstoque = `SELECT SUM(ESTOQUE) as TOTAL_ESTOQUE FROM TGFEST WHERE CODPROD = ${codProd}`;
+    const resultEstoque = await queryJson('DbExplorerSP.executeQuery', { sql: sqlEstoque });
+    
+    let estoqueDisponivel = 0;
+    if (resultEstoque.rows.length > 0 && resultEstoque.rows[0][0] !== null) {
+      estoqueDisponivel = parseFloat(resultEstoque.rows[0][0]);
+    }
+
+    if (qtdRetirarNumerica > estoqueDisponivel) {
+      Alert.alert(
+        'Estoque insuficiente',
+        `Quantidade solicitada: ${qtdRetirar}\nEstoque disponível: ${estoqueDisponivel.toFixed(3)}\n\nNão há estoque suficiente para realizar a retirada.`
+      );
+      return;
+    }
+
+  } catch (error) {
+    console.error('Erro ao consultar estoque:', error);
+    Alert.alert('Erro', 'Não foi possível verificar o estoque disponível');
     return;
   }
 
@@ -459,12 +515,12 @@ const handleItemPress = async (item: any) => {
     await registrarRetiradaAlmoxarifado({
       CODPROD: codProd,
       DESCRPROD: descricaoProduto,
-      ESTOQUE: quantidadeOP,
+      ESTOQUE: quantidadeOPOriginal, // Usar a string ORIGINAL com casas decimais
       QTDSEPARADA: qtdRetirar,
       USUARIO: usuario,
       OP: Number(idiproc),
-      UNIDADE: codVol,
-      LOTE: lote // Usar o lote informado
+      UNIDADE: unidadeOP, // Usar a unidade extraída
+      LOTE: lote
     });
 
     setDados(prev => prev.map(item => {
@@ -474,11 +530,11 @@ const handleItemPress = async (item: any) => {
           separado: {
             CODPROD: codProd,
             DESCRPROD: descricaoProduto,
-            ESTOQUE: quantidadeOP,
+            ESTOQUE: quantidadeOPOriginal, // Manter a original
             QTDSEPARADA: qtdRetirar,
             USUARIO: usuario,
             OP: Number(idiproc),
-            UNIDADE: codVol,
+            UNIDADE: unidadeOP,
             LOTE: lote
           }
         };
@@ -490,7 +546,7 @@ const handleItemPress = async (item: any) => {
     setDadosEndereco([]);
     setEndereco('');
     setQuantidadeRetirada('');
-    setLoteRetirada(''); // Limpar o campo do lote
+    setLoteRetirada('');
     Alert.alert('Sucesso', 'Retirada registrada com sucesso!');
   } catch (error) {
     console.error('Erro na retirada:', error);
@@ -506,7 +562,7 @@ const handleItemPress = async (item: any) => {
     
     Alert.alert('Erro', errorMessage);
   }
-  };
+};
 
   const buscarSeparacoes = async (idiproc: number) => {
   try {
@@ -572,9 +628,9 @@ const handleItemPress = async (item: any) => {
             MP2.DESCRPROD AS PRODUTOMP,
             CASE
               WHEN (MP.QTDMISTURA * PA.QTDPRODUZIR) < 0.999
-                THEN FORMAT((MP.QTDMISTURA * PA.QTDPRODUZIR) * 1000, '0.#######') + ' ' + MP.CODVOL
+                THEN REPLACE(FORMAT((MP.QTDMISTURA * PA.QTDPRODUZIR) * 1000, '0.#######'), ',', '.') + ' ' + MP.CODVOL
               ELSE
-                FORMAT((MP.QTDMISTURA * PA.QTDPRODUZIR), '0.#######') + ' ' + MP.CODVOL
+                REPLACE(FORMAT((MP.QTDMISTURA * PA.QTDPRODUZIR), '0.#######'), ',', '.') + ' ' + MP.CODVOL
             END AS QUANTIDADE,
             MP.CODVOL AS UNIDADE,
             MP.AD_SEQUENCIAMP AS SEQUENCIA,
@@ -619,7 +675,7 @@ const handleItemPress = async (item: any) => {
         )
         SELECT
           IDIPROC, REFERENCIA, PRODUTOPA, LOTE, COD_MP, PRODUTOMP, QUANTIDADE, 
-           UNIDADE, SEQUENCIA, FASE, TEMPERATURA, OBSERVACAO, EXECUTANTE
+          UNIDADE, SEQUENCIA, FASE, TEMPERATURA, OBSERVACAO, EXECUTANTE
         FROM RankedData
         WHERE rn = 1
         ORDER BY SEQUENCIA
@@ -887,6 +943,9 @@ const handleItemPress = async (item: any) => {
                       <Text style={{ marginBottom: 16 }}>
                         <Text style={{ fontWeight: 'bold' }}>Qtd OP:</Text> {itemOPModal?.QUANTIDADE || 'N/A'}
                       </Text>
+                      <Text style={{ marginBottom: 16, color: '#1976d2', fontWeight: 'bold' }}>
+                        <Text style={{ fontWeight: 'bold' }}>Estoque Disponível:</Text> {estoqueTotal}
+                      </Text>
 
                       <TextInput
                         style={styles.input}
@@ -897,31 +956,48 @@ const handleItemPress = async (item: any) => {
                       />
 
                       <TextInput
-                          style={styles.input}
-                          placeholder={`Quantidade a retirar (${dadosEndereco[0][7]})`}
-                          keyboardType="numeric"
-                          value={quantidadeRetirada}
-                          onChangeText={(text) => {
-                            // Substitui vírgula por ponto
-                            let formattedText = text.replace(',', '.');
-                            
-                            // Remove caracteres não numéricos exceto ponto
-                            formattedText = formattedText.replace(/[^0-9.]/g, '');
-                            
-                            // Permite apenas um ponto decimal
-                            const parts = formattedText.split('.');
-                            if (parts.length > 2) {
-                              formattedText = parts[0] + '.' + parts.slice(1).join('');
-                            }
-                            
-                            // Limita a 3 casas decimais
-                            if (parts.length === 2 && parts[1].length > 3) {
+                        style={styles.input}
+                        placeholder={`Quantidade a retirar (${dadosEndereco[0][7]})`}
+                        keyboardType="numeric"
+                        value={quantidadeRetirada}
+                        onChangeText={(text) => {
+                          // Substitui vírgula por ponto
+                          let formattedText = text.replace(',', '.');
+                          
+                          // Remove caracteres não numéricos exceto ponto
+                          formattedText = formattedText.replace(/[^0-9.]/g, '');
+                          
+                          // Permite apenas um ponto decimal
+                          const parts = formattedText.split('.');
+                          if (parts.length > 2) {
+                            formattedText = parts[0] + '.' + parts.slice(1).join('');
+                          }
+                          
+                          // Força exatamente 3 casas decimais após o ponto
+                          if (parts.length === 2) {
+                            if (parts[1].length > 3) {
                               formattedText = parts[0] + '.' + parts[1].substring(0, 3);
+                            } else if (parts[1].length < 3) {
+                              // Não completa automaticamente, mas permite digitar
+                              // O usuário precisa digitar as 3 casas
+                              formattedText = parts[0] + '.' + parts[1];
                             }
-                            
-                            setQuantidadeRetirada(formattedText);
-                          }}
-                        />
+                          }
+                          
+                          setQuantidadeRetirada(formattedText);
+                        }}
+                        // Adiciona validação no blur para forçar 3 casas
+                        onBlur={() => {
+                          const parts = quantidadeRetirada.split('.');
+                          if (parts.length === 2 && parts[1].length !== 3) {
+                            Alert.alert(
+                              'Formato incorreto',
+                              `A quantidade deve ter exatamente 3 casas decimais após o ponto.\nExemplo: 1.123`
+                            );
+                            setQuantidadeRetirada('');
+                          }
+                        }}
+                      />
 
 
                       <TouchableOpacity
