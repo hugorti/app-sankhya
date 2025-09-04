@@ -780,40 +780,87 @@ export const criarNotaFiscal = async (data: {
   CODCENCUS: number;
   CODTIPOPER: number;
   TIPMOV: string;
-  STATUSNOTA: string;
   CODTIPVENDA: number;
   CODNAT: number;
-}): Promise<any> => {
-  const requestBody = {
-    serviceName: "CRUDServiceProvider.saveRecord",
-    requestBody: {
-      dataSet: {
-        rootEntity: "CabecalhoNota",
-        includePresentationFields: "N",
-        dataRow: {
-          localFields: {
-            IDIPROC: { "$": data.IDIPROC },
-            CODEMP: { "$": data.CODEMP },
-            NUMNOTA: { "$": data.NUMNOTA },
-            STATUSNOTA: { "$": data.STATUSNOTA },
-            CODCENCUS: { "$": data.CODCENCUS },
-            CODTIPOPER: { "$": data.CODTIPOPER },
-            TIPMOV: { "$": data.TIPMOV },
-            CODTIPVENDA: { "$": data.CODTIPVENDA },
-            CODNAT: { "$": data.CODNAT }
-          }
-        },
-        entity: {
-          fieldset: {
-            list: "IDIPROC"
+}, itensSeparados: any[]): Promise<any> => {
+  try {
+    // 1. Primeiro buscar o último NUMNOTA disponível
+    const queryNumNotaBody = {
+      serviceName: "DbExplorerSP.executeQuery",
+      requestBody: {
+        sql: `SELECT COALESCE(MAX(NUMNOTA), 0) + 1 AS PROXIMO_NUMNOTA 
+               FROM TGFCAB 
+               WHERE TIPMOV = 'T' AND CODTIPOPER = ${data.CODTIPOPER} AND CODEMP = ${data.CODEMP}` // Filtra pelo IDIPROC
+      }
+    };
+    const numNotaResponse = await api.post(
+      'mge/service.sbr?serviceName=DbExplorerSP.executeQuery&outputType=json',
+      queryNumNotaBody,
+      { headers: { 'Content-Type': 'application/json' } }
+    );
+
+    const numNotaResult = numNotaResponse.data.responseBody;
+    let proximoNumNota = 1;
+
+    if (numNotaResult.rows && numNotaResult.rows.length > 0) {
+      proximoNumNota = numNotaResult.rows[0][0];
+      console.log('Próximo NUMNOTA disponível:', proximoNumNota);
+    }
+
+    // 2. Calcular a quantidade total de volumes (soma das quantidades dos itens)
+    const qtdVol = itensSeparados.reduce((total, item) => {
+      return total + Math.round(parseFloat(item.separado.QTDSEPARADA));
+    }, 0);
+
+    console.log('Quantidade total de volumes:', qtdVol);
+
+    // 3. Formatar data e hora atual no formato DD/MM/YYYY HH:MM
+    const now = new Date();
+    const day = String(now.getDate()).padStart(2, '0');
+    const month = String(now.getMonth() + 1).padStart(2, '0');
+    const year = now.getFullYear();
+    const hours = String(now.getHours()).padStart(2, '0');
+    const minutes = String(now.getMinutes()).padStart(2, '0');
+    const dataHora = `${day}/${month}/${year} ${hours}:${minutes}`;
+
+    console.log('Data e hora formatada:', dataHora);
+
+    // 4. Criar a nota fiscal com todos os campos
+    const requestBody = {
+      serviceName: "CRUDServiceProvider.saveRecord",
+      requestBody: {
+        dataSet: {
+          rootEntity: "CabecalhoNota",
+          includePresentationFields: "N",
+          dataRow: {
+            localFields: {
+              IDIPROC: { "$": data.IDIPROC },
+              CODEMP: { "$": data.CODEMP },
+              NUMNOTA: { "$": proximoNumNota },
+              CODCENCUS: { "$": data.CODCENCUS },
+              CODTIPOPER: { "$": data.CODTIPOPER },
+              TIPMOV: { "$": data.TIPMOV },
+              CODTIPVENDA: { "$": data.CODTIPVENDA },
+              CODNAT: { "$": data.CODNAT },
+              DTFATUR: { "$": dataHora }, // Data de faturamento no formato DD/MM/YYYY HH:MM
+              QTDVOL: { "$": qtdVol }, // Quantidade total de volumes
+              HRENTSAI: { "$": dataHora }, // Hora de entrada/saída no mesmo formato
+              HISTCONFIG: { "$": "S" }, // Histórico configurado
+              APROVADO: { "$": "N" } // Não aprovado
+            }
+          },
+          entity: {
+            fieldset: {
+              list: "IDIPROC"
+            }
           }
         }
       }
-    }
-  };
+    };
 
-  try {
-    // 1. Cria a nota
+    console.log('Criando nota fiscal com dados:', JSON.stringify(requestBody, null, 2));
+
+    // 5. Criar a nota
     const response = await api.post(
       'mge/service.sbr?serviceName=CRUDServiceProvider.saveRecord&outputType=json',
       requestBody,
@@ -824,39 +871,79 @@ export const criarNotaFiscal = async (data: {
       throw new Error(response.data.statusMessage || 'Erro ao criar nota fiscal');
     }
 
-    // 2. Consulta o NUNOTA pelo IDIPROC
-    const queryBody = {
+    // 6. Consultar o NUNOTA pelo IDIPROC
+    const queryNunotaBody = {
       serviceName: "DbExplorerSP.executeQuery",
       requestBody: {
         sql: `SELECT NUNOTA FROM TGFCAB WHERE IDIPROC = ${data.IDIPROC}`
       }
     };
 
-    const queryResponse = await api.post(
+    const nunotaResponse = await api.post(
       'mge/service.sbr?serviceName=DbExplorerSP.executeQuery&outputType=json',
-      queryBody,
+      queryNunotaBody,
       { headers: { 'Content-Type': 'application/json' } }
     );
 
-    // Analisando a estrutura da resposta baseada no log de erro
-    const result = queryResponse.data.responseBody;
+    const nunotaResult = nunotaResponse.data.responseBody;
     
-    if (result.rows && result.rows.length > 0) {
-      // A resposta vem como um array dentro de rows[0]
-      const nunota = result.rows[0][0]; // Primeiro elemento do primeiro array
+    if (nunotaResult.rows && nunotaResult.rows.length > 0) {
+      const nunota = nunotaResult.rows[0][0];
       
       if (!nunota) {
-        console.error("Retorno consulta NUNOTA:", JSON.stringify(result, null, 2));
+        console.error("Retorno consulta NUNOTA:", JSON.stringify(nunotaResult, null, 2));
         throw new Error("Não foi possível recuperar o NUNOTA da nota criada");
       }
 
-      return { nunota };
+      return { nunota, numnota: proximoNumNota };
     } else {
-      console.error("Retorno consulta NUNOTA:", JSON.stringify(result, null, 2));
+      console.error("Retorno consulta NUNOTA:", JSON.stringify(nunotaResult, null, 2));
       throw new Error("Nenhum registro encontrado para o IDIPROC");
     }
   } catch (error) {
     console.error("Erro ao criar nota fiscal:", error);
+    throw error;
+  }
+};
+
+export const atualizarStatusNota = async (nunota: number): Promise<void> => {
+  const requestBody = {
+    serviceName: "CRUDServiceProvider.saveRecord",
+    requestBody: {
+      dataSet: {
+        rootEntity: "CabecalhoNota",
+        includePresentationFields: "N",
+        dataRow: {
+          localFields: {
+            "STATUSNOTA": { "$": "L" }
+          },
+          key: {
+            "NUNOTA": { "$": nunota }
+          }
+        },
+        entity: {
+          fieldset: {
+            list: "NUNOTA, STATUSNOTA"
+          }
+        }
+      }
+    }
+  };
+
+  try {
+    const response = await api.post(
+      'mge/service.sbr?serviceName=CRUDServiceProvider.saveRecord&outputType=json',
+      requestBody,
+      { headers: { 'Content-Type': 'application/json' } }
+    );
+
+    if (response.data.status !== "1") {
+      throw new Error(response.data.statusMessage || 'Erro ao atualizar status da nota');
+    }
+
+    console.log('Status da nota atualizado para "L" com sucesso');
+  } catch (error) {
+    console.error("Erro ao atualizar status da nota:", error);
     throw error;
   }
 };
@@ -885,7 +972,9 @@ export const adicionarItemNotaFiscal = async (data: {
             SEQUENCIA: { "$": data.SEQUENCIA },
             CODVOL: { "$": data.CODVOL },
             CODLOCALORIG: { "$": data.CODLOCALORIG },
-            CODLOCALDEST: { "$": data.CODLOCALDEST }
+            CODLOCALDEST: { "$": data.CODLOCALDEST },
+            USOPROD: { "$": "E"},
+            STATUSNOTA: { "$": "L" }
           }
         },
         entity: {
@@ -951,7 +1040,6 @@ export const query = async (serviceName: string, requestBody: string): Promise<a
     );
   }
 };
-
 // XML escape helper
 function escapeXml(unsafe: string): string {
   return unsafe.replace(/[<>&'"]/g, (c) => {

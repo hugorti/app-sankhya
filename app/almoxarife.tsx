@@ -2,7 +2,7 @@
 import { View, Text, StyleSheet, ActivityIndicator, TextInput, TouchableOpacity, ScrollView, SafeAreaView, Modal, Alert, FlatList } from 'react-native';
 import { useState, useEffect } from 'react';
 import { useRouter } from 'expo-router';
-import { queryJson, registrarRetiradaAlmoxarifado, iniciarSeparacao, finalizarSeparacao, criarNotaFiscal, adicionarItemNotaFiscal } from '@/services/api';
+import { queryJson, registrarRetiradaAlmoxarifado, iniciarSeparacao, finalizarSeparacao, criarNotaFiscal, adicionarItemNotaFiscal, atualizarStatusNota } from '@/services/api';
 import { useSession } from '@/hooks/useSession';
 import { Ionicons } from '@expo/vector-icons';
 
@@ -266,7 +266,6 @@ const handleFinalizarSeparacao = async () => {
               NUMNOTA: 0,
               CODCENCUS: 109002,
               CODTIPOPER: 1242,
-              STATUSNOTA: 'L',
               TIPMOV: 'T',
               CODTIPVENDA: 0,
               CODNAT: 3010103
@@ -274,7 +273,8 @@ const handleFinalizarSeparacao = async () => {
 
             console.log('Criando nota fiscal com dados:', notaFiscalData);
 
-            const notaFiscalResponse = await criarNotaFiscal(notaFiscalData);
+            // PASSE OS ITENS SEPARADOS COMO SEGUNDO PARÂMETRO
+            const notaFiscalResponse = await criarNotaFiscal(notaFiscalData, itensSeparados);
             const nunota = notaFiscalResponse.nunota;
 
             console.log('Nota fiscal criada com NUNOTA:', nunota);
@@ -301,7 +301,11 @@ const handleFinalizarSeparacao = async () => {
               await adicionarItemNotaFiscal(itemData);
             }
 
-            // 4. Só depois de criar o movimento com sucesso, finalizar a separação
+            // 4. ATUALIZAR O STATUS DA NOTA PARA 'L'
+            console.log('Atualizando status da nota para "L"');
+            await atualizarStatusNota(nunota);
+
+            // 5. Só depois de criar o movimento com sucesso, finalizar a separação
             await finalizarSeparacao({
               IDIPROC: Number(idiproc),
               username: session?.username || '',
@@ -310,13 +314,13 @@ const handleFinalizarSeparacao = async () => {
               inicioTimestamp: inicioTimestamp
             });
             
-            // 5. Atualiza o estado local
+            // 6. Atualiza o estado local
             setSeparacaoFinalizada(true);
             setPodeSepararItens(false);
             
-            Alert.alert('Sucesso', 'Movimento criado e separação finalizada com sucesso!');
+            Alert.alert('Sucesso', 'Movimento criado, status atualizado e separação finalizada com sucesso!');
             
-            // 6. Voltar para tela anterior ou limpar dados
+            // 7. Voltar para tela anterior ou limpar dados
             setDados([]);
             setIdiproc('');
             setIdeiAtv(null);
@@ -991,9 +995,9 @@ const buscarProximaSequencia = async (nunota: number): Promise<number> => {
                       <Text style={{ marginBottom: 8 }}>
                         <Text style={{ fontWeight: 'bold' }}>Endereço:</Text> {dadosEndereco[0][2]}
                       </Text>
-                      <Text style={{ marginBottom: 8 }}>
+                      {/* <Text style={{ marginBottom: 8 }}>
                         <Text style={{ fontWeight: 'bold' }}>Lote OP:</Text> {itemOPModal?.LOTE || 'N/A'}
-                      </Text>
+                      </Text> */}
                       <Text style={{ marginBottom: 16 }}>
                         <Text style={{ fontWeight: 'bold' }}>Qtd OP:</Text> {itemOPModal?.QUANTIDADE || 'N/A'}
                       </Text>
@@ -1011,7 +1015,7 @@ const buscarProximaSequencia = async (nunota: number): Promise<number> => {
 
                       <TextInput
                         style={styles.input}
-                        placeholder={`Quantidade a retirar (${dadosEndereco[0][7]})`}
+                        placeholder={`Quantidade a retirar`}
                         keyboardType="numeric"
                         value={quantidadeRetirada}
                         onChangeText={(text) => {
@@ -1122,24 +1126,13 @@ const buscarProximaSequencia = async (nunota: number): Promise<number> => {
                   </View>
                 )}
 
-              <Text style={{ fontWeight: 'bold', marginBottom: 8 }}>
-                Digite o endereço desejado:
-              </Text>
-              <TextInput
-                style={styles.input}
-                placeholder="Digite o endereço completo"
-                value={endereco}
-                onChangeText={setEndereco}
-                autoCapitalize="characters"
-              />
-
-              <TouchableOpacity
+              {/* <TouchableOpacity
                 style={[styles.searchButton, { marginTop: 16, opacity: endereco ? 1 : 0.5 }]}
                 onPress={buscarEnderecoEspecifico}
                 disabled={!endereco}
               >
                 <Text style={styles.searchButtonText}>Buscar Endereço</Text>
-              </TouchableOpacity>
+              </TouchableOpacity> */}
 
               <TouchableOpacity
                 style={[
@@ -1223,6 +1216,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: '#ddd',
     fontSize: 16,
+    marginBottom: 8,
   },
   searchButton: {
     flexDirection: 'row',
@@ -1370,10 +1364,9 @@ const styles = StyleSheet.create({
     marginTop: 2,
   },
    detalhesEndereco: {
-    backgroundColor: '#f0f8ff',
-    padding: 12,
+    padding: 6,
     borderRadius: 8,
-    marginBottom: 12,
+    marginBottom: 8,
     borderWidth: 1,
     borderColor: '#b8daff',
   },
@@ -1445,7 +1438,7 @@ const styles = StyleSheet.create({
   },
   enderecoList: {
     maxHeight: 200,
-    marginBottom: 16,
+    marginBottom: 4,
   },
   noDataText: {
     textAlign: 'center',
