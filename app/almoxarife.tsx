@@ -2,9 +2,10 @@
 import { View, Text, StyleSheet, ActivityIndicator, TextInput, TouchableOpacity, ScrollView, SafeAreaView, Modal, Alert, FlatList } from 'react-native';
 import { useState, useEffect } from 'react';
 import { useRouter } from 'expo-router';
-import { queryJson, registrarRetiradaAlmoxarifado, iniciarSeparacao, finalizarSeparacao, criarNotaFiscal, adicionarItemNotaFiscal, atualizarStatusNota } from '@/services/api';
+import api, { queryJson, registrarRetiradaAlmoxarifado, iniciarSeparacao, buscarDadosAtividadeEmbalagem, finalizarAtividadeEmbalagemComSession } from '@/services/api';
 import { useSession } from '@/hooks/useSession';
 import { Ionicons } from '@expo/vector-icons';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 interface DadosSeparacao {
   CODPROD: number;
@@ -244,7 +245,7 @@ const handleFinalizarSeparacao = async () => {
 
   Alert.alert(
     'Confirmação',
-    'Tem certeza que deseja finalizar a separação? O movimento será criado automaticamente.',
+    'Tem certeza que deseja finalizar a separação?',
     [
       {
         text: 'Cancelar',
@@ -256,71 +257,48 @@ const handleFinalizarSeparacao = async () => {
           try {
             setLoading(true);
             
-            // 1. Primeiro criar o movimento (nota fiscal)
-            const itensSeparados = dados.filter(item => item.separado);
+            // 1. BUSCAR TODOS OS DADOS NECESSÁRIOS DE UMA VEZ
+            console.log('Buscando dados da atividade de embalagem...');
+            const dadosAtividade = await buscarDadosAtividadeEmbalagem(Number(idiproc));
             
-            // Dados para criar a nota fiscal
-            const notaFiscalData = {
-              IDIPROC: Number(idiproc),
-              CODEMP: 1,
-              NUMNOTA: 0,
-              CODCENCUS: 109002,
-              CODTIPOPER: 1242,
-              TIPMOV: 'T',
-              CODTIPVENDA: 0,
-              CODNAT: 3010103
-            };
-
-            console.log('Criando nota fiscal com dados:', notaFiscalData);
-
-            // PASSE OS ITENS SEPARADOS COMO SEGUNDO PARÂMETRO
-            const notaFiscalResponse = await criarNotaFiscal(notaFiscalData, itensSeparados);
-            const nunota = notaFiscalResponse.nunota;
-
-            console.log('Nota fiscal criada com NUNOTA:', nunota);
-
-            // 2. Buscar a próxima sequência disponível para evitar duplicação
-            const proximaSequencia = await buscarProximaSequencia(nunota);
-            console.log('Próxima sequência disponível:', proximaSequencia);
-
-            // 3. Adicionar itens à nota fiscal com sequência correta
-            for (let i = 0; i < itensSeparados.length; i++) {
-              const item = itensSeparados[i];
-              const itemData = {
-                NUNOTA: nunota,
-                CODPROD: item.COD_MP,
-                QTDNEG: parseFloat(item.separado!.QTDSEPARADA),
-                SEQUENCIA: proximaSequencia + i, // Usar sequência incremental a partir da disponível
-                CODVOL: item.separado!.UNIDADE,
-                CODLOCALORIG: 50000000,
-                CODLOCALDEST: 60000000,
-                PENDENTE: 'N'
-              };
-
-              console.log('Adicionando item:', itemData);
-              await adicionarItemNotaFiscal(itemData);
+            if (!dadosAtividade) {
+              throw new Error('Dados da atividade de embalagem não encontrados');
             }
 
-            // 4. ATUALIZAR O STATUS DA NOTA PARA 'L'
-            console.log('Atualizando status da nota para "L"');
-            await atualizarStatusNota(nunota);
+            if (!dadosAtividade.IDIATV || !dadosAtividade.IDEFX || !dadosAtividade.IDPROC) {
+              throw new Error('Dados incompletos da atividade de embalagem');
+            }
 
-            // 5. Só depois de criar o movimento com sucesso, finalizar a separação
-            await finalizarSeparacao({
+            console.log('Dados encontrados:', dadosAtividade);
+
+            // 2. Verificar se temos a session
+            const sessionStorage = await AsyncStorage.getItem('sankhya_session');
+            if (!sessionStorage) {
+              throw new Error('Sessão não encontrada. Faça login novamente.');
+            }
+
+            const sessionData = JSON.parse(sessionStorage);
+            const jsessionid = sessionData.jsessionid;
+
+            if (!jsessionid) {
+              throw new Error('Session ID não encontrado');
+            }
+
+            // 3. Finalizar a atividade de embalagem (usando função modificada)
+            console.log('Finalizando atividade de embalagem...');
+            const resultado = await finalizarAtividadeEmbalagemComSession({
               IDIPROC: Number(idiproc),
-              username: session?.username || '',
-              IDEIATV: ideiAtv,
-              IDIATV: idiAtv,
-              inicioTimestamp: inicioTimestamp
+              IDEFX: dadosAtividade.IDEFX,
+              IDIATV: dadosAtividade.IDIATV,
+              IDPROC: dadosAtividade.IDPROC,
+              jsessionid: jsessionid
             });
+
+            console.log('Atividade finalizada com sucesso:', resultado);
+
+            Alert.alert('Sucesso', 'Separação finalizada com sucesso!');
             
-            // 6. Atualiza o estado local
-            setSeparacaoFinalizada(true);
-            setPodeSepararItens(false);
-            
-            Alert.alert('Sucesso', 'Movimento criado, status atualizado e separação finalizada com sucesso!');
-            
-            // 7. Voltar para tela anterior ou limpar dados
+            // 4. Voltar para tela anterior ou limpar dados
             setDados([]);
             setIdiproc('');
             setIdeiAtv(null);
@@ -329,37 +307,7 @@ const handleFinalizarSeparacao = async () => {
 
           } catch (error: any) {
             console.error('Erro ao finalizar separação:', error);
-            
-            // Tratamento específico para erro de chave duplicada
-            if (error.message && error.message.includes('Violação da restrição PRIMARY KEY')) {
-              Alert.alert(
-                'Erro de duplicidade', 
-                'Já existe um movimento para esta OP. Por favor, verifique no sistema.'
-              );
-            } 
-            // Tratamento específico para erro de estoque insuficiente
-            else if (error.message && error.message.includes('ESTOQUE INSUFICIENTE')) {
-              const codProdMatch = error.message.match(/Produto: (\d+)/);
-              const quantidadeMatch = error.message.match(/Quantidade: (\d+)/);
-              
-              let mensagemErro = 'Estoque insuficiente!';
-              
-              if (codProdMatch && codProdMatch[1]) {
-                const codProd = codProdMatch[1];
-                const produtoComErro = dados.find(item => item.COD_MP.toString() === codProd);
-                const nomeProduto = produtoComErro ? produtoComErro.PRODUTOMP : `Código: ${codProd}`;
-                
-                mensagemErro = `Produto: ${nomeProduto}\nCódigo: ${codProd}`;
-                
-                if (quantidadeMatch && quantidadeMatch[1]) {
-                  mensagemErro += `\nQuantidade solicitada: ${quantidadeMatch[1]}`;
-                }
-              }
-              
-              Alert.alert('Estoque insuficiente!', mensagemErro);
-            } else {
-              Alert.alert('Erro', error instanceof Error ? error.message : 'Falha ao finalizar separação');
-            }
+            Alert.alert('Erro', error instanceof Error ? error.message : 'Falha ao finalizar separação');
           } finally {
             setLoading(false);
           }
@@ -367,22 +315,6 @@ const handleFinalizarSeparacao = async () => {
       }
     ]
   );
-};
-
-// Função para buscar a próxima sequência disponível
-const buscarProximaSequencia = async (nunota: number): Promise<number> => {
-  try {
-    const sql = `SELECT COALESCE(MAX(SEQUENCIA), 0) + 1 AS PROXIMA_SEQUENCIA FROM TGFITE WHERE NUNOTA = ${nunota}`;
-    const result = await queryJson('DbExplorerSP.executeQuery', { sql });
-    
-    if (result.rows.length > 0) {
-      return result.rows[0][0];
-    }
-    return 1; // Se não houver itens, começa com 1
-  } catch (error) {
-    console.error('Erro ao buscar próxima sequência:', error);
-    return 1; // Fallback para sequência 1
-  }
 };
 
  const buscarEnderecosProduto = async (codProd: number) => {
@@ -439,44 +371,6 @@ const buscarProximaSequencia = async (nunota: number): Promise<number> => {
     setLoading(false);
   }
 };
-
-
-  const buscarEnderecoEspecifico = async () => {
-    if (!endereco.trim() || !codProdSelecionado) return;
-    
-    try {
-      const sql = `
-        SELECT 
-          EXP.CODPROD,
-          PRO.DESCRPROD,
-          ED.ENDERECO,
-          ED.CODEND,
-          VOA.QUANTIDADE,
-          EST.ESTOQUE,
-          EST.ESTOQUEVOLPAD,
-          EST.CODVOL
-        FROM TGWEXP EXP
-        LEFT JOIN TGWEND ED ON ED.CODEND = EXP.CODEND
-        JOIN TGFPRO PRO ON PRO.CODPROD = EXP.CODPROD
-        LEFT JOIN TGWEST EST ON EST.CODPROD = EXP.CODPROD AND EST.CODEND = EXP.CODEND
-        LEFT JOIN TGFVOA VOA ON VOA.CODPROD = EXP.CODPROD AND VOA.CODVOL = EST.CODVOL
-        WHERE EXP.CODPROD = ${codProdSelecionado}
-          AND ED.ENDERECO = '${endereco.trim().toUpperCase()}'
-      `;
-      
-      const res = await queryJson('DbExplorerSP.executeQuery', { sql });
-      
-      if (res.rows.length > 0) {
-        setDadosEndereco(res.rows);
-        setModalMode('confirmacao');
-      } else {
-        Alert.alert('Erro', 'Endereço não encontrado. Verifique si digitou corretamente.');
-      }
-    } catch (err) {
-      console.error('Erro ao buscar endereço específico:', err);
-      Alert.alert('Erro', 'Erro ao buscar endereço');
-    }
-  };
 
   const confirmarRetirada = async () => {
   if (!dadosEndereco.length || codProdSelecionado === null) return;

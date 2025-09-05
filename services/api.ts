@@ -476,6 +476,57 @@ export const buscarCodUsu = async (username: string): Promise<number> => {
   }
 };
 
+export const buscarDadosAtividadeEmbalagem = async (idiproc: number): Promise<{
+    IDIATV: number | null;
+    IDEFX: number | null;
+    IDIPROC: number | null;
+    IDPROC: number | null;
+      } | null> => {
+    try {
+    // Buscar dados da atividade de embalagem
+    const sqlAtividade = `
+      SELECT ATV.IDIATV, ATV.IDEFX, ATV.IDIPROC
+      FROM TPRIATV ATV
+      JOIN TPREFX FX ON FX.IDEFX = ATV.IDEFX
+      WHERE ATV.IDIPROC = ${idiproc} 
+        AND FX.DESCRICAO = 'EMBALAGEM' 
+        AND ATV.DHACEITE IS NOT NULL;
+    `;
+    
+    const resultAtividade = await queryJson('DbExplorerSP.executeQuery', { sql: sqlAtividade });
+    
+    if (resultAtividade.rows.length === 0) {
+      return null;
+    }
+
+    const atividade = resultAtividade.rows[0];
+    const IDIATV = atividade[0];
+    const IDEFX = atividade[1];
+    const IDIPROC = atividade[2];
+
+    // Buscar IDPROC da tabela TPRIPROC
+    const sqlProcesso = `
+      SELECT IDPROC 
+      FROM TPRIPROC 
+      WHERE IDIPROC = ${idiproc};
+    `;
+    
+    const resultProcesso = await queryJson('DbExplorerSP.executeQuery', { sql: sqlProcesso });
+    const IDPROC = resultProcesso.rows.length > 0 ? resultProcesso.rows[0][0] : null;
+
+    return {
+      IDIATV,
+      IDEFX,
+      IDIPROC,
+      IDPROC
+    };
+
+  } catch (error) {
+    console.error('Erro ao buscar dados da atividade de embalagem:', error);
+    return null;
+  }
+};
+
 export const iniciarSeparacao = async (data: {
   IDIPROC: number;
   username: string;
@@ -595,124 +646,82 @@ export const iniciarSeparacao = async (data: {
   }
 };
 
-export const finalizarSeparacao = async (data: {
+// FUNÇÃO CORRIGIDA - USANDO SUA API CONFIGURADA
+export const finalizarAtividadeEmbalagemComSession = async (data: {
   IDIPROC: number;
-  username: string;
-  IDEIATV: number;
+  IDEFX: number;
   IDIATV: number;
-  inicioTimestamp: number; // Receber o timestamp do início
+  IDPROC: number;
+  jsessionid: string;
 }): Promise<any> => {
   try {
-    // Buscar o CODUSU com base no username
-    const codUsu = await buscarCodUsu(data.username);
-    
-    // Buscar o IDIATV da operação de EMBALAGEM (como fallback)
-    const idiAtv = data.IDIATV || await buscarIdiAtvEmbalagem(data.IDIPROC);
-    
-    if (!idiAtv) {
-      throw new Error('Não foi encontrada atividade de EMBALAGEM para esta OP');
-    }
-
-    // Formatar data e hora atual no formato DD/MM/YYYY HH:MM
-    const now = new Date();
-    const day = String(now.getDate()).padStart(2, '0');
-    const month = String(now.getMonth() + 1).padStart(2, '0');
-    const year = now.getFullYear();
-    const hours = String(now.getHours()).padStart(2, '0');
-    const minutes = String(now.getMinutes()).padStart(2, '0');
-    const dataHora = `${day}/${month}/${year} ${hours}:${minutes}`;
-
-    // Calcular o tempo gasto em minutos (arredondando para baixo)
-    const tempoGastoMs = now.getTime() - data.inicioTimestamp;
-    const tempoGastoMin = Math.floor(tempoGastoMs / (1000 * 60));
-
-    // PRIMEIRO: Finalizar InstanciaAtividade
-    const requestBodyInstancia = {
-      serviceName: "CRUDServiceProvider.saveRecord",
+    // FORMATO EXATO QUE FUNCIONA
+    const requestBody = {
+      serviceName: "OperacaoProducaoSP.finalizarInstanciaAtividades",
       requestBody: {
-        dataSet: {
-          rootEntity: "InstanciaAtividade",
-          includePresentationFields: "N",
-          dataRow: {
-            localFields: {
+        instancias: {
+          confirmarApontamentosDivergentes: true,
+          instancia: [
+            {
+              IDIATV: { "$": data.IDIATV },
+              IDEFX: { "$": data.IDEFX },
               IDIPROC: { "$": data.IDIPROC },
-              DHFINAL: { "$": dataHora },
-              CODUSUFIN: { "$": codUsu }, 
-              CODULTEXEC: { "$": codUsu },
-              TEMPOGASTOMIN: { "$": tempoGastoMin } // Tempo gasto em minutos
-            },
-            key: {
-              IDIATV: { "$": idiAtv }
+              IDPROC: { "$": data.IDPROC }
             }
-          },
-          entity: {
-            fieldset: {
-              list: "IDIPROC, DHFINAL, CODUSUFIN, CODULTEXEC, TEMPOGASTOMIN"
-            }
-          }
+          ]
+        },
+        clientEventList: {
+          clientEvent: [
+            { "$": "br.com.sankhya.mgeprod.apontamentos.divergentes" },
+            { "$": "br.com.sankhya.mgeProd.wc.indisponivel" },
+            { "$": "br.com.sankhya.mgeprod.redimensionar.op.pa.perda" },
+            { "$": "br.com.sankhya.mgeprod.redimensionar.op.pa.avisos" },
+            { "$": "br.com.sankhya.mgeprod.trocaturno.avisos" },
+            { "$": "br.com.sankhya.mgeprod.finalizar.liberacao.desvio.pa" },
+            { "$": "br.com.sankhya.actionbutton.clientconfirm" },
+            { "$": "br.com.sankhya.mgeProd.apontamento.ultimo" },
+            { "$": "br.com.sankhya.mgeprod.operacaoproducao.mpalt.proporcao.apontamento.invalida" },
+            { "$": "br.com.sankhya.mgeProd.apontamento.liberaNroSerie" },
+            { "$": "br.com.sankhya.prod.remove.apontamento.pesagemvolume" },
+            { "$": "br.com.sankhya.mgeprod.confirma.ultimo.apontamento.mp.fixo" },
+            { "$": "br.com.sankhya.apontamentomp.naoreproporcionalizado" }
+          ]
         }
       }
     };
 
-    // SEGUNDO: Finalizar ExecucaoAtividade
-    const requestBodyExecucao = {
-      serviceName: "CRUDServiceProvider.saveRecord",
-      requestBody: {
-        dataSet: {
-          rootEntity: "ExecucaoAtividade",
-          includePresentationFields: "N",
-          dataRow: {
-            localFields: {
-              DHFINAL: { "$": dataHora }, // Mesmo DHFINAL da Instancia
-              CODEXEC: { "$": codUsu },   // CODUSU obtido da TSIUSU
-              CODUSU: { "$": codUsu },    // CODUSU obtido da TSIUSU
-              TIPO: { "$": "N" },         // Indicando que a execução foi finalizada
-              CODMTP: { "$": 0 }          // Código do motivo de finalização (0 = Normal)
-            },
-            key: {
-              IDEIATV: { "$": data.IDEIATV }
-            }
-          },
-          entity: {
-            fieldset: {
-              list: "IDEIATV, DHFINAL, CODEXEC, CODUSU, TIPO, CODMTP"
-            }
-          }
-        }
+     const url = `mgeprod/service.sbr?serviceName=OperacaoProducaoSP.finalizarInstanciaAtividades&outputType=json&preventTransform=false&mgeSession=${data.jsessionid}`;
+    console.log('Enviando requisição para finalizar atividade...');
+    
+    // USANDO SUA INSTÂNCIA API CONFIGURADA
+    const response = await api.post(
+      url,
+      requestBody,
+      { 
+        headers: { 
+          'Content-Type': 'application/json',
+          'Accept': 'application/json'
+        },
+        timeout: 15000
       }
-    };
-
-    // Finalizar InstanciaAtividade
-    const responseInstancia = await api.post(
-      'mge/service.sbr?serviceName=CRUDServiceProvider.saveRecord&outputType=json',
-      requestBodyInstancia,
-      { headers: { 'Content-Type': 'application/json' } }
     );
 
-    if (responseInstancia.data.status !== "1") {
-      throw new Error(responseInstancia.data.statusMessage || 'Erro ao finalizar InstanciaAtividade');
+    console.log('Resposta do servidor:', response.data);
+
+    if (response.data.status !== "1") {
+      throw new Error(response.data.statusMessage || 'Erro ao finalizar InstanciaAtividade');
     }
 
-    // Finalizar ExecucaoAtividade
-    const responseExecucao = await api.post(
-      'mge/service.sbr?serviceName=CRUDServiceProvider.saveRecord&outputType=json',
-      requestBodyExecucao,
-      { headers: { 'Content-Type': 'application/json' } }
-    );
+    return response.data.responseBody;
 
-    if (responseExecucao.data.status !== "1") {
-      throw new Error(responseExecucao.data.statusMessage || 'Erro ao finalizar ExecucaoAtividade');
+  } catch (error: any) {
+    console.error('Error finalizando atividade de embalagem:', error);
+    
+    // Log mais detalhado do erro
+    if (error.response) {
+      console.error('Resposta de erro:', error.response.data);
     }
-
-    return {
-      instanciaAtividade: responseInstancia.data.responseBody,
-      execucaoAtividade: responseExecucao.data.responseBody,
-      CODUSU: codUsu,
-      tempoGastoMin: tempoGastoMin // Retornando o tempo gasto
-    };
-
-  } catch (error) {
-    console.error('Error finishing separation:', error);
+    
     throw error;
   }
 };
@@ -768,238 +777,6 @@ export const registrarRetiradaAlmoxarifado = async (data: {
     return response.data.responseBody;
   } catch (error) {
     console.error('Error registering withdrawal:', error);
-    throw error;
-  }
-};
-
-// Função para criar uma nota fiscal
-export const criarNotaFiscal = async (data: {
-  IDIPROC: number;
-  CODEMP: number;
-  NUMNOTA: number;
-  CODCENCUS: number;
-  CODTIPOPER: number;
-  TIPMOV: string;
-  CODTIPVENDA: number;
-  CODNAT: number;
-}, itensSeparados: any[]): Promise<any> => {
-  try {
-    // 1. Primeiro buscar o último NUMNOTA disponível
-    const queryNumNotaBody = {
-      serviceName: "DbExplorerSP.executeQuery",
-      requestBody: {
-        sql: `SELECT COALESCE(MAX(NUMNOTA), 0) + 1 AS PROXIMO_NUMNOTA 
-               FROM TGFCAB 
-               WHERE TIPMOV = 'T' AND CODTIPOPER = ${data.CODTIPOPER} AND CODEMP = ${data.CODEMP}` // Filtra pelo IDIPROC
-      }
-    };
-    const numNotaResponse = await api.post(
-      'mge/service.sbr?serviceName=DbExplorerSP.executeQuery&outputType=json',
-      queryNumNotaBody,
-      { headers: { 'Content-Type': 'application/json' } }
-    );
-
-    const numNotaResult = numNotaResponse.data.responseBody;
-    let proximoNumNota = 1;
-
-    if (numNotaResult.rows && numNotaResult.rows.length > 0) {
-      proximoNumNota = numNotaResult.rows[0][0];
-      console.log('Próximo NUMNOTA disponível:', proximoNumNota);
-    }
-
-    // 2. Calcular a quantidade total de volumes (soma das quantidades dos itens)
-    const qtdVol = itensSeparados.reduce((total, item) => {
-      return total + Math.round(parseFloat(item.separado.QTDSEPARADA));
-    }, 0);
-
-    console.log('Quantidade total de volumes:', qtdVol);
-
-    // 3. Formatar data e hora atual no formato DD/MM/YYYY HH:MM
-    const now = new Date();
-    const day = String(now.getDate()).padStart(2, '0');
-    const month = String(now.getMonth() + 1).padStart(2, '0');
-    const year = now.getFullYear();
-    const hours = String(now.getHours()).padStart(2, '0');
-    const minutes = String(now.getMinutes()).padStart(2, '0');
-    const dataHora = `${day}/${month}/${year} ${hours}:${minutes}`;
-
-    console.log('Data e hora formatada:', dataHora);
-
-    // 4. Criar a nota fiscal com todos os campos
-    const requestBody = {
-      serviceName: "CRUDServiceProvider.saveRecord",
-      requestBody: {
-        dataSet: {
-          rootEntity: "CabecalhoNota",
-          includePresentationFields: "N",
-          dataRow: {
-            localFields: {
-              IDIPROC: { "$": data.IDIPROC },
-              CODEMP: { "$": data.CODEMP },
-              NUMNOTA: { "$": proximoNumNota },
-              CODCENCUS: { "$": data.CODCENCUS },
-              CODTIPOPER: { "$": data.CODTIPOPER },
-              TIPMOV: { "$": data.TIPMOV },
-              CODTIPVENDA: { "$": data.CODTIPVENDA },
-              CODNAT: { "$": data.CODNAT },
-              DTFATUR: { "$": dataHora }, // Data de faturamento no formato DD/MM/YYYY HH:MM
-              QTDVOL: { "$": qtdVol }, // Quantidade total de volumes
-              HRENTSAI: { "$": dataHora }, // Hora de entrada/saída no mesmo formato
-              HISTCONFIG: { "$": "S" }, // Histórico configurado
-              APROVADO: { "$": "N" } // Não aprovado
-            }
-          },
-          entity: {
-            fieldset: {
-              list: "IDIPROC"
-            }
-          }
-        }
-      }
-    };
-
-    console.log('Criando nota fiscal com dados:', JSON.stringify(requestBody, null, 2));
-
-    // 5. Criar a nota
-    const response = await api.post(
-      'mge/service.sbr?serviceName=CRUDServiceProvider.saveRecord&outputType=json',
-      requestBody,
-      { headers: { 'Content-Type': 'application/json' } }
-    );
-
-    if (response.data.status !== "1") {
-      throw new Error(response.data.statusMessage || 'Erro ao criar nota fiscal');
-    }
-
-    // 6. Consultar o NUNOTA pelo IDIPROC
-    const queryNunotaBody = {
-      serviceName: "DbExplorerSP.executeQuery",
-      requestBody: {
-        sql: `SELECT NUNOTA FROM TGFCAB WHERE IDIPROC = ${data.IDIPROC}`
-      }
-    };
-
-    const nunotaResponse = await api.post(
-      'mge/service.sbr?serviceName=DbExplorerSP.executeQuery&outputType=json',
-      queryNunotaBody,
-      { headers: { 'Content-Type': 'application/json' } }
-    );
-
-    const nunotaResult = nunotaResponse.data.responseBody;
-    
-    if (nunotaResult.rows && nunotaResult.rows.length > 0) {
-      const nunota = nunotaResult.rows[0][0];
-      
-      if (!nunota) {
-        console.error("Retorno consulta NUNOTA:", JSON.stringify(nunotaResult, null, 2));
-        throw new Error("Não foi possível recuperar o NUNOTA da nota criada");
-      }
-
-      return { nunota, numnota: proximoNumNota };
-    } else {
-      console.error("Retorno consulta NUNOTA:", JSON.stringify(nunotaResult, null, 2));
-      throw new Error("Nenhum registro encontrado para o IDIPROC");
-    }
-  } catch (error) {
-    console.error("Erro ao criar nota fiscal:", error);
-    throw error;
-  }
-};
-
-export const atualizarStatusNota = async (nunota: number): Promise<void> => {
-  const requestBody = {
-    serviceName: "CRUDServiceProvider.saveRecord",
-    requestBody: {
-      dataSet: {
-        rootEntity: "CabecalhoNota",
-        includePresentationFields: "N",
-        dataRow: {
-          localFields: {
-            "STATUSNOTA": { "$": "L" }
-          },
-          key: {
-            "NUNOTA": { "$": nunota }
-          }
-        },
-        entity: {
-          fieldset: {
-            list: "NUNOTA, STATUSNOTA"
-          }
-        }
-      }
-    }
-  };
-
-  try {
-    const response = await api.post(
-      'mge/service.sbr?serviceName=CRUDServiceProvider.saveRecord&outputType=json',
-      requestBody,
-      { headers: { 'Content-Type': 'application/json' } }
-    );
-
-    if (response.data.status !== "1") {
-      throw new Error(response.data.statusMessage || 'Erro ao atualizar status da nota');
-    }
-
-    console.log('Status da nota atualizado para "L" com sucesso');
-  } catch (error) {
-    console.error("Erro ao atualizar status da nota:", error);
-    throw error;
-  }
-};
-
-// Função para adicionar itens à nota fiscal
-export const adicionarItemNotaFiscal = async (data: {
-  NUNOTA: number;
-  CODPROD: number;
-  QTDNEG: number;
-  SEQUENCIA: number;
-  CODVOL: string;
-  CODLOCALORIG: number;
-  CODLOCALDEST: number;
-}): Promise<any> => {
-  const requestBody = {
-    serviceName: "CRUDServiceProvider.saveRecord",
-    requestBody: {
-      dataSet: {
-        rootEntity: "ItemNota",
-        includePresentationFields: "N",
-        dataRow: {
-          localFields: {
-            NUNOTA: { "$": data.NUNOTA },
-            CODPROD: { "$": data.CODPROD },
-            QTDNEG: { "$": data.QTDNEG },
-            SEQUENCIA: { "$": data.SEQUENCIA },
-            CODVOL: { "$": data.CODVOL },
-            CODLOCALORIG: { "$": data.CODLOCALORIG },
-            CODLOCALDEST: { "$": data.CODLOCALDEST },
-            USOPROD: { "$": "E"},
-            STATUSNOTA: { "$": "L" }
-          }
-        },
-        entity: {
-          fieldset: {
-            list: "NUNOTA, CODPROD, QTDNEG"
-          }
-        }
-      }
-    }
-  };
-
-  try {
-    const response = await api.post(
-      'mge/service.sbr?serviceName=CRUDServiceProvider.saveRecord&outputType=json',
-      requestBody,
-      { headers: { 'Content-Type': 'application/json' } }
-    );
-
-    if (response.data.status !== "1") {
-      throw new Error(response.data.statusMessage || 'Erro ao adicionar item à nota fiscal');
-    }
-
-    return response.data.responseBody;
-  } catch (error) {
-    // console.error('Erro ao adicionar item à nota fiscal:', error);
     throw error;
   }
 };

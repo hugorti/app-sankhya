@@ -127,7 +127,7 @@ const handleLoginError = (error: Error) => {
       
       <View style={styles.logoContainer}>
         <Text style={styles.title}>WMS LABOTRAT</Text>
-        <Text style={styles.subtitle}>Acesso ao Sistema</Text>
+        <Text style={styles.subtitle}>Sistema de gerenciamento</Text>
       </View>
       
       {/* Campo de Usuário */}
