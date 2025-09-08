@@ -553,19 +553,19 @@ export const buscarDadosAtividadeEmbalagem = async (idiproc: number): Promise<{
   }
 };
 
-export const buscarQuantidadesSeparadas = async (nunota: number): Promise<Array<{CODPROD: number, QTDSEPARADA: number}>> => {
+export const buscarQuantidadesSeparadas = async (idiproc: number): Promise<Array<{CODPROD: number, QTDSEPARADA: number}>> => {
   try {
     const sql = `
       SELECT DISTINCT
-        AD.CODPROD,
-        AD.QTDSEPARADA
+        AD.QTDSEPARADA,
+        AD.CODPROD
       FROM TGFCAB CAB 
       JOIN TGFITE ITE 
         ON ITE.NUNOTA = CAB.NUNOTA
       JOIN AD_ALMOXARIFEWMS AD 
         ON AD.OP = CAB.IDIPROC
         AND AD.CODPROD = ITE.CODPROD
-      WHERE CAB.NUNOTA = ${nunota};
+      WHERE CAB.IDIPROC = ${idiproc} AND AD.QTDSEPARADA IS NOT NULL;
     `;
     
     const result = await queryJson('DbExplorerSP.executeQuery', { sql });
@@ -575,8 +575,8 @@ export const buscarQuantidadesSeparadas = async (nunota: number): Promise<Array<
     }
 
     return result.rows.map((row: any) => ({
-      CODPROD: row[0],
-      QTDSEPARADA: parseFloat(row[1]) || 0
+      CODPROD: parseInt(row[1]),
+      QTDSEPARADA: parseFloat(row[0]) || 0
     }));
 
   } catch (error) {
@@ -602,8 +602,8 @@ export const buscarSequenciasItensNota = async (nunota: number): Promise<Array<{
     }
 
     return result.rows.map((row: any) => ({
-      CODPROD: row[0],
-      SEQUENCIA: row[1],
+      CODPROD: parseInt(row[0]),
+      SEQUENCIA: parseInt(row[1]),
       QTDORIGINAL: parseFloat(row[2]) || 0
     }));
 
@@ -613,123 +613,135 @@ export const buscarSequenciasItensNota = async (nunota: number): Promise<Array<{
   }
 };
 
-// Função principal para atualizar as quantidades na nota
-export const atualizarQuantidadesNota = async (nunota: number): Promise<any> => {
+export const buscarItensNota = async (nunota: number): Promise<Array<{CODPROD: number, SEQUENCIA: number, QTDNEG: number}>> => {
   try {
-    console.log('Iniciando atualização da nota:', nunota);
+    const sql = `
+      SELECT CODPROD, SEQUENCIA, QTDNEG
+      FROM TGFITE
+      WHERE NUNOTA = ${nunota}
+      ORDER BY SEQUENCIA;
+    `;
     
-    // 1. Buscar quantidades separadas
-    const quantidadesSeparadas = await buscarQuantidadesSeparadas(nunota);
-    if (quantidadesSeparadas.length === 0) {
-      console.log('Nenhuma quantidade separada encontrada para a nota:', nunota);
-      return { success: true, message: 'Nenhuma quantidade para atualizar' };
+    const result = await queryJson('DbExplorerSP.executeQuery', { sql });
+    
+    if (result.rows.length === 0) {
+      return [];
     }
 
-    console.log('Quantidades separadas encontradas:', quantidadesSeparadas);
+    return result.rows.map((row: any) => ({
+      CODPROD: parseInt(row[0]),
+      SEQUENCIA: parseInt(row[1]),
+      QTDNEG: parseFloat(row[2]) || 0
+    }));
 
-    // 2. Buscar sequências dos itens da nota
-    const itensNota = await buscarSequenciasItensNota(nunota);
+  } catch (error) {
+    console.error('Erro ao buscar itens da nota:', error);
+    throw new Error('Falha ao buscar itens da nota');
+  }
+};
+
+// Vamos adicionar logs detalhados na função principal
+export const atualizarQuantidadesNota = async (
+  nunota: number,
+  quantidadesSeparadas: Array<{CODPROD: number, QTDSEPARADA: number}>
+): Promise<any> => {
+  try {
+    console.log('🔄 Buscando itens da nota:', nunota);
+    
+    // Buscar itens da nota
+    const itensNota = await buscarItensNota(nunota);
+    console.log('📝 Itens da nota:', itensNota);
+    
     if (itensNota.length === 0) {
       throw new Error('Nenhum item encontrado na nota');
     }
 
-    console.log('Itens da nota encontrados:', itensNota);
-
-    // 3. Atualizar cada item
     const resultados = [];
-    
+    let itensAtualizados = 0;
+
+    // ATUALIZAR CADA ITEM
     for (const item of itensNota) {
-      // Encontrar a quantidade separada correspondente
       const qtdSeparada = quantidadesSeparadas.find(q => q.CODPROD === item.CODPROD);
       
-      if (qtdSeparada && qtdSeparada.QTDSEPARADA > 0) {
-        console.log(`Atualizando produto ${item.CODPROD}: ${item.QTDORIGINAL} -> ${qtdSeparada.QTDSEPARADA}`);
+      if (qtdSeparada) {
+        console.log(`📦 Atualizando item ${item.CODPROD}, seq ${item.SEQUENCIA}: ${item.QTDNEG} -> ${qtdSeparada.QTDSEPARADA}`);
         
-        const resultado = await atualizarItemNota({
-          NUNOTA: nunota,
-          CODPROD: item.CODPROD,
-          SEQUENCIA: item.SEQUENCIA,
-          QTDNEG: qtdSeparada.QTDSEPARADA
-        });
-        
-        resultados.push(resultado);
+        try {
+          const requestBody = {
+            serviceName: "CRUDServiceProvider.saveRecord",
+            requestBody: {
+              dataSet: {
+                rootEntity: "ItemNota",
+                includePresentationFields: "N",
+                dataRow: {
+                  localFields: {
+                    CODPROD: { "$": item.CODPROD },
+                    QTDNEG: { "$": qtdSeparada.QTDSEPARADA.toString() },
+                    SEQUENCIA: { "$": item.SEQUENCIA }
+                  },
+                  key: {
+                    NUNOTA: { "$": nunota }
+                  }
+                },
+                entity: {
+                  fieldset: {
+                    list: "NUNOTA, CODPROD, QTDNEG"
+                  }
+                }
+              }
+            }
+          };
+
+          const response = await api.post(
+            'mge/service.sbr?serviceName=CRUDServiceProvider.saveRecord&outputType=json',
+            requestBody,
+            { 
+              headers: { 
+                'Content-Type': 'application/json',
+                'Accept': 'application/json'
+              } 
+            }
+          );
+
+          if (response.data.status === "1") {
+            resultados.push({
+              success: true,
+              CODPROD: item.CODPROD,
+              SEQUENCIA: item.SEQUENCIA,
+              QTDNEG: qtdSeparada.QTDSEPARADA
+            });
+            itensAtualizados++;
+            console.log(`✅ Item ${item.CODPROD} atualizado`);
+          } else {
+            throw new Error(response.data.statusMessage);
+          }
+
+        } catch (error: any) {
+          console.error(`❌ Erro ao atualizar item ${item.CODPROD}:`, error);
+          resultados.push({
+            success: false,
+            CODPROD: item.CODPROD,
+            SEQUENCIA: item.SEQUENCIA,
+            error: error.message
+          });
+        }
       }
     }
 
-    console.log('Atualização concluída para nota:', nunota);
+    console.log(`✅ ${itensAtualizados} itens atualizados na nota ${nunota}`);
     return {
       success: true,
-      message: `Nota ${nunota} atualizada com sucesso`,
-      itensAtualizados: resultados.length,
+      nunota: nunota,
+      itensAtualizados: itensAtualizados,
+      totalItens: itensNota.length,
       detalhes: resultados
     };
 
   } catch (error) {
-    console.error('Erro ao atualizar quantidades da nota:', error);
+    console.error('❌ Erro ao atualizar nota:', error);
     throw error;
   }
 };
-
-// Função para atualizar um item específico da nota
-export const atualizarItemNota = async (data: {
-  NUNOTA: number;
-  CODPROD: number;
-  SEQUENCIA: number;
-  QTDNEG: number;
-}): Promise<any> => {
-  try {
-    const requestBody = {
-      serviceName: "CRUDServiceProvider.saveRecord",
-      requestBody: {
-        dataSet: {
-          rootEntity: "ItemNota",
-          includePresentationFields: "N",
-          dataRow: {
-            localFields: {
-              CODPROD: { "$": data.CODPROD },
-              QTDNEG: { "$": data.QTDNEG.toString() },
-              SEQUENCIA: { "$": data.SEQUENCIA }
-            },
-            key: {
-              NUNOTA: { "$": data.NUNOTA }
-            }
-          },
-          entity: {
-            fieldset: {
-              list: "NUNOTA, CODPROD, QTDNEG, SEQUENCIA"
-            }
-          }
-        }
-      }
-    };
-
-    console.log('Atualizando item:', data);
-    
-    const response = await api.post(
-      'mge/service.sbr?serviceName=CRUDServiceProvider.saveRecord&outputType=json',
-      requestBody,
-      { headers: { 'Content-Type': 'application/json' } }
-    );
-
-    console.log('Resposta da atualização:', response.data);
-
-    if (response.data.status !== "1") {
-      throw new Error(response.data.statusMessage || 'Erro ao atualizar item');
-    }
-
-    return {
-      success: true,
-      CODPROD: data.CODPROD,
-      SEQUENCIA: data.SEQUENCIA,
-      QTDNEG: data.QTDNEG
-    };
-
-  } catch (error) {
-    console.error('Erro ao atualizar item da nota:', error);
-    throw error;
-  }
-};
-
 
 export const iniciarSeparacao = async (data: {
   IDIPROC: number;
@@ -850,7 +862,36 @@ export const iniciarSeparacao = async (data: {
   }
 };
 
-// FUNÇÃO CORRIGIDA - USANDO SUA API CONFIGURADA
+export const buscarNunotaGeradaPelaOperacao = async (idiproc: number): Promise<number | null> => {
+  try {
+    const sql = `
+      SELECT DISTINCT
+        CAB.NUNOTA
+      FROM TGFCAB CAB 
+      JOIN TGFITE ITE 
+        ON ITE.NUNOTA = CAB.NUNOTA
+      JOIN AD_ALMOXARIFEWMS AD 
+        ON AD.OP = CAB.IDIPROC
+        AND AD.CODPROD = ITE.CODPROD
+      WHERE CAB.IDIPROC = ${idiproc} AND AD.QTDSEPARADA IS NOT NULL;
+    `;
+    
+    const result = await queryJson('DbExplorerSP.executeQuery', { sql });
+    
+    if (result.rows && result.rows.length > 0) {
+      const nunota = parseInt(result.rows[0][0]);
+      console.log('✅ NUNOTA encontrada:', nunota);
+      return nunota;
+    }
+    
+    console.log('⚠️ Nenhuma NUNOTA encontrada para a operação');
+    return null;
+  } catch (error) {
+    console.error('❌ Erro ao buscar NUNOTA:', error);
+    return null;
+  }
+};
+
 export const finalizarAtividadeEmbalagemComSession = async (data: {
   IDIPROC: number;
   IDEFX: number;
@@ -900,8 +941,8 @@ export const finalizarAtividadeEmbalagemComSession = async (data: {
     // USAR AXIOS DIRECTAMENTE SEM INSTÂNCIA PARA EVITAR INTERCEPTORS
     const url = `${mgeprodBaseURL}service.sbr?serviceName=OperacaoProducaoSP.finalizarInstanciaAtividades&application=OperacaoProducao&outputType=json&preventTransform=false&mgeSession=${data.jsessionid}`;
     
-    console.log('Enviando requisição para finalizar atividade...');
-    console.log('URL completa:', url);
+    console.log('🔵 Enviando requisição para finalizar atividade...');
+    console.log('🔵 URL completa:', url);
 
     // USAR AXIOS DIRECTAMENTE COM CONFIGURAÇÃO SIMPLES
     const response = await axios.post(url, requestBody, {
@@ -911,11 +952,10 @@ export const finalizarAtividadeEmbalagemComSession = async (data: {
         'Cookie': `JSESSIONID=${data.jsessionid}`
       },
       timeout: 30000,
-      // DESABILITAR transformResponse para ver a resposta raw
       transformResponse: []
     });
 
-    console.log('Resposta bruta do servidor:', response.data);
+    console.log('🔵 Resposta bruta do servidor:', response.data);
 
     // MANUALMENTE PROCESSAR A RESPOSTA
     let responseData;
@@ -925,7 +965,7 @@ export const finalizarAtividadeEmbalagemComSession = async (data: {
         ? JSON.parse(response.data) 
         : response.data;
     } catch (parseError) {
-      console.log('Resposta não é JSON válido, tratando como texto:', response.data);
+      console.log('🔵 Resposta não é JSON válido, tratando como texto:', response.data);
       // Se não for JSON, verificar se contém indicadores de sucesso
       if (response.data && response.data.includes('status') && response.data.includes('"1"')) {
         responseData = { status: "1", success: true };
@@ -934,40 +974,55 @@ export const finalizarAtividadeEmbalagemComSession = async (data: {
       }
     }
 
-    console.log('Resposta parseada:', responseData);
+    console.log('🔵 Resposta parseada:', responseData);
 
     // VERIFICAR SE FOI BEM-SUCEDIDO
     if (responseData && responseData.status === "1") {
       console.log('✅ Atividade finalizada com sucesso!');
       
-      // ⭐⭐ ATUALIZAR QUANTIDADES NA NOTA ⭐⭐
-      try {
-        if (responseData.responseBody && responseData.responseBody.pk && responseData.responseBody.pk.NUNOTA) {
-          const nunota = responseData.responseBody.pk.NUNOTA.$;
-          console.log('NUNOTA gerada:', nunota);
-          
-          // Atualizar quantidades na nota
-          const resultadoAtualizacao = await atualizarQuantidadesNota(parseInt(nunota));
-          console.log('Resultado da atualização:', resultadoAtualizacao);
-          
-          // Adicionar info da atualização na resposta
-          responseData.atualizacaoNota = resultadoAtualizacao;
-        } else {
-          console.log('NUNOTA não encontrada na resposta, pulando atualização');
-          responseData.atualizacaoNota = {
-            success: false,
-            message: 'NUNOTA não encontrada na resposta'
-          };
-        }
-      } catch (updateError: any) {
-        console.error('Erro ao atualizar nota, mas a atividade foi finalizada:', updateError);
-        // Não lançar erro aqui - a atividade principal foi bem-sucedida
-        responseData.atualizacaoNota = { 
-          success: false, 
-          error: updateError.message,
-          message: 'Atividade finalizada, mas falha na atualização da nota' 
+      // ⭐⭐ AGUARDAR PARA A NOTA SER GERADA E PROCESSADA ⭐⭐
+      console.log('⏳ Aguardando processamento da nota...');
+      await new Promise(resolve => setTimeout(resolve, 5000));
+      
+      // ⭐⭐ BUSCAR A NUNOTA USANDO SEU SCRIPT CORRETO ⭐⭐
+      console.log('🔄 Buscando NUNOTA gerada pela operação...');
+      const nunota = await buscarNunotaGeradaPelaOperacao(data.IDIPROC);
+      
+      if (!nunota) {
+        console.log('⚠️ NUNOTA não encontrada após finalização da operação');
+        responseData.atualizacaoNota = {
+          success: false,
+          message: 'NUNOTA não gerada após finalização da operação'
         };
+        return responseData;
       }
+
+      console.log('📋 NUNOTA encontrada:', nunota);
+      
+      // ⭐⭐ BUSCAR AS QUANTIDADES SEPARADAS ⭐⭐
+      console.log('🔄 Buscando quantidades separadas...');
+      const quantidadesSeparadas = await buscarQuantidadesSeparadas(data.IDIPROC);
+      
+      if (quantidadesSeparadas.length === 0) {
+        console.log('⚠️ Nenhuma quantidade separada encontrada');
+        responseData.atualizacaoNota = {
+          success: true,
+          message: 'Nenhuma quantidade separada para atualizar'
+        };
+        return responseData;
+      }
+
+      console.log('📦 Quantidades separadas encontradas:', quantidadesSeparadas);
+      
+      // ⭐⭐ AGUARDAR MAIS UM POUCO PARA GARANTIR ⭐⭐
+      await new Promise(resolve => setTimeout(resolve, 2000));
+      
+      // ⭐⭐ ATUALIZAR AS QUANTIDADES NA NOTA ⭐⭐
+      console.log('🔄 Atualizando quantidades na nota...');
+      const resultadoAtualizacao = await atualizarQuantidadesNota(nunota, quantidadesSeparadas);
+      
+      console.log('✅ Quantidades atualizadas com sucesso:', resultadoAtualizacao);
+      responseData.atualizacaoNota = resultadoAtualizacao;
       
       return responseData;
     }
@@ -976,11 +1031,11 @@ export const finalizarAtividadeEmbalagemComSession = async (data: {
     throw new Error(responseData.statusMessage || 'Erro ao finalizar atividade');
 
   } catch (error: any) {
-    console.error('Error na finalização:', error);
+    console.error('❌ Error na finalização:', error);
     
     // VERIFICAR SE A RESPOSTA VEIO NO ERROR (COMUM NO AXIOS)
     if (error.response && error.response.data) {
-      console.log('Resposta veio no error.response:', error.response.data);
+      console.log('🔵 Resposta veio no error.response:', error.response.data);
       
       try {
         const errorData = typeof error.response.data === 'string' 
@@ -990,82 +1045,98 @@ export const finalizarAtividadeEmbalagemComSession = async (data: {
         if (errorData.status === "1") {
           console.log('✅ Atividade finalizada com sucesso (resposta no error)!');
           
-          // ⭐⭐ ATUALIZAR QUANTIDADES NA NOTA MESMO COM ERRO NO AXIOS ⭐⭐
+          // ⭐⭐ TENTAR ATUALIZAR QUANTIDADES MESMO COM ERRO NO AXIOS ⭐⭐
           try {
-            if (errorData.responseBody && errorData.responseBody.pk && errorData.responseBody.pk.NUNOTA) {
-              const nunota = errorData.responseBody.pk.NUNOTA.$;
-              console.log('NUNOTA gerada (from error):', nunota);
+            console.log('🔄 Buscando NUNOTA gerada pela operação (from error)...');
+            const nunota = await buscarNunotaGeradaPelaOperacao(data.IDIPROC);
+            
+            if (nunota) {
+              console.log('📋 NUNOTA encontrada (from error):', nunota);
               
-              // Atualizar quantidades na nota
-              const resultadoAtualizacao = await atualizarQuantidadesNota(parseInt(nunota));
-              console.log('Resultado da atualização:', resultadoAtualizacao);
+              const quantidadesSeparadas = await buscarQuantidadesSeparadas(data.IDIPROC);
               
-              // Adicionar info da atualização na resposta
-              errorData.atualizacaoNota = resultadoAtualizacao;
+              if (quantidadesSeparadas.length > 0) {
+                await new Promise(resolve => setTimeout(resolve, 2000));
+                
+                const resultadoAtualizacao = await atualizarQuantidadesNota(nunota, quantidadesSeparadas);
+                console.log('✅ Quantidades atualizadas (from error):', resultadoAtualizacao);
+                
+                errorData.atualizacaoNota = resultadoAtualizacao;
+              } else {
+                errorData.atualizacaoNota = {
+                  success: true,
+                  message: 'Nenhuma quantidade separada para atualizar'
+                };
+              }
+            } else {
+              errorData.atualizacaoNota = {
+                success: false,
+                message: 'NUNOTA não encontrada para atualização'
+              };
             }
           } catch (updateError: any) {
-            console.error('Erro ao atualizar nota:', updateError);
+            console.error('❌ Erro ao processar quantidades (from error):', updateError);
             errorData.atualizacaoNota = { 
               success: false, 
               error: updateError.message,
-              message: 'Falha na atualização da nota' 
+              message: 'Falha no processamento das quantidades separadas' 
             };
           }
           
           return errorData;
         }
       } catch (parseError) {
-        console.log('Não foi possível parsear error.response');
+        console.log('❌ Não foi possível parsear error.response');
       }
     }
     
     // SE É NETWORK ERROR, VERIFICAR SE REALMENTE FALHOU
     if (error.code === 'ERR_NETWORK' || error.message.includes('Network')) {
-      console.log('Network error detectado, verificando se atividade foi finalizada...');
+      console.log('🌐 Network error detectado, verificando se atividade foi finalizada...');
       
       try {
         const verification = await verificarAtividadeFinalizada(data.IDIATV);
         if (verification.finalizada) {
           console.log('✅ Atividade finalizada apesar do network error!');
           
-          // ⭐⭐ TENTAR OBTER O NUNOTA E ATUALIZAR A NOTA ⭐⭐
           try {
-            const nunota = await buscarNunotaPorIdiproc(data.IDIPROC);
+            console.log('🔄 Buscando NUNOTA gerada pela operação (network error)...');
+            const nunota = await buscarNunotaGeradaPelaOperacao(data.IDIPROC);
+            
             if (nunota) {
-              console.log('NUNOTA encontrada:', nunota);
+              const quantidadesSeparadas = await buscarQuantidadesSeparadas(data.IDIPROC);
               
-              // Atualizar quantidades na nota
-              const resultadoAtualizacao = await atualizarQuantidadesNota(nunota);
-              console.log('Resultado da atualização:', resultadoAtualizacao);
-              
-              return { 
-                status: "1", 
-                success: true, 
-                message: 'Atividade finalizada (network error ignorado)',
-                atualizacaoNota: resultadoAtualizacao,
-                responseBody: {
-                  pk: {
-                    NUNOTA: { "$": nunota.toString() }
-                  }
-                }
-              };
+              if (quantidadesSeparadas.length > 0) {
+                await new Promise(resolve => setTimeout(resolve, 2000));
+                
+                const resultadoAtualizacao = await atualizarQuantidadesNota(nunota, quantidadesSeparadas);
+                
+                return { 
+                  status: "1", 
+                  success: true, 
+                  message: 'Atividade finalizada (network error ignorado)',
+                  atualizacaoNota: resultadoAtualizacao
+                };
+              }
             }
-          } catch (nunotaError) {
-            console.log('Não foi possível obter NUNOTA para atualização:', nunotaError);
+            
+            return { 
+              status: "1", 
+              success: true, 
+              message: 'Atividade finalizada (network error ignorado)',
+              atualizacaoNota: {
+                success: nunota ? buscarQuantidadesSeparadas.length === 0 : false,
+                message: nunota 
+                  ? 'Nenhuma quantidade separada para atualizar' 
+                  : 'NUNOTA não encontrada para atualização'
+              }
+            };
+          } catch (processError) {
+            console.log('❌ Não foi possível processar quantidades:', processError);
           }
-          
-          return { 
-            status: "1", 
-            success: true, 
-            message: 'Atividade finalizada (network error ignorado)',
-            atualizacaoNota: {
-              success: false,
-              message: 'Não foi possível obter NUNOTA para atualização'
-            }
-          };
         }
       } catch (verifyError) {
-        console.log('Falha na verificação:', verifyError);
+        console.log('❌ Falha na verificação:', verifyError);
       }
     }
     
@@ -1076,32 +1147,39 @@ export const finalizarAtividadeEmbalagemComSession = async (data: {
     );
   }
 };
-
-// FUNÇÃO AUXILIAR PARA BUSCAR NUNOTA POR IDIPROC
-const buscarNunotaPorIdiproc = async (idiproc: number): Promise<number | null> => {
+// Função auxiliar para verificar quantidades atualizadas
+export const verificarQuantidadesAtualizadas = async (nunota: number): Promise<void> => {
   try {
     const sql = `
-      SELECT NUNOTA 
-      FROM TGFCAB 
-      WHERE IDIPROC = ${idiproc} 
-      ORDER BY NUNOTA DESC 
-      LIMIT 1
+      SELECT 
+        I.CODPROD,
+        P.DESCRPROD,
+        I.SEQUENCIA, 
+        I.QTDNEG as QTD_ATUAL,
+        (SELECT AD.QTDSEPARADA FROM AD_ALMOXARIFEWMS AD 
+         WHERE AD.OP = (SELECT CAB.IDIPROC FROM TGFCAB CAB WHERE CAB.NUNOTA = I.NUNOTA)
+         AND AD.CODPROD = I.CODPROD) as QTD_SEPARADA
+      FROM TGFITE I
+      JOIN TGFPRO P ON P.CODPROD = I.CODPROD
+      WHERE I.NUNOTA = ${nunota}
+      ORDER BY I.SEQUENCIA
     `;
     
     const result = await queryJson('DbExplorerSP.executeQuery', { sql });
     
-    if (result.rows.length > 0) {
-      return result.rows[0][0];
+    if (result.rows && result.rows.length > 0) {
+      console.log('📋 VERIFICAÇÃO - Quantidades atuais na nota:', nunota);
+      result.rows.forEach((row: any[]) => {
+        console.log(`   Produto: ${row[0]} - ${row[1]}, Seq: ${row[2]}, Qtd: ${row[3]}, Separada: ${row[4]}`);
+      });
+    } else {
+      console.log('📋 Nenhum item encontrado na nota para verificação:', nunota);
     }
-    
-    return null;
   } catch (error) {
-    console.error('Erro ao buscar NUNOTA:', error);
-    return null;
+    console.error('❌ Erro ao verificar quantidades:', error);
   }
 };
 
-// FUNÇÃO PARA VERIFICAR SE A ATIVIDADE FOI REALMENTE FINALIZADA
 const verificarAtividadeFinalizada = async (idiAtv: number): Promise<{ finalizada: boolean }> => {
   try {
     const sql = `
@@ -1127,17 +1205,67 @@ const verificarAtividadeFinalizada = async (idiAtv: number): Promise<{ finalizad
     return { finalizada: false };
   }
 };
+// Adicione estas funções no arquivo services/api.ts
+export const atualizarStatusSeparacao = async (codProd: number, status: number, usuario: string, op: number): Promise<any> => {
+  const requestBody = {
+    serviceName: "CRUDServiceProvider.saveRecord",
+    requestBody: {
+      dataSet: {
+        rootEntity: "AD_ALMOXARIFEWMS",
+        includePresentationFields: "N",
+        dataRow: {
+          localFields: {
+            CODPROD: { "$": codProd },
+            STATUS: { "$": status },
+            USUARIO: { "$": usuario },
+            OP: { "$": op }
 
-export const registrarRetiradaAlmoxarifado = async (data: {
-  CODPROD: number;
-  DESCRPROD: string;
-  ESTOQUE: string;
-  QTDSEPARADA: string;
-  USUARIO: string;
-  UNIDADE: string;
-  OP: number;
-  LOTE: string;
-}): Promise<any> => {
+          }
+        },
+        entity: {
+          fieldset: {
+            list: "CODIGO, CODPROD, STATUS, USUARIO"
+          }
+        }
+      }
+    }
+  };
+
+  console.log('Request body para status 1:', JSON.stringify(requestBody, null, 2));
+
+  try {
+    const response = await api.post(
+      'mge/service.sbr?serviceName=CRUDServiceProvider.saveRecord&outputType=json',
+      requestBody,
+      { headers: { 'Content-Type': 'application/json' } }
+    );
+
+    console.log('Resposta status 1:', JSON.stringify(response.data, null, 2));
+
+    if (response.data.status !== "1") {
+      throw new Error(response.data.statusMessage || 'Erro ao atualizar status');
+    }
+
+    return response.data;
+  } catch (error) {
+    console.error('Error updating status:', error);
+    throw error;
+  }
+};
+
+export const finalizarSeparacaoCompleta = async (data: {
+    CODIGO: number;
+    CODPROD: number;
+    STATUS: string;
+    DESCRPROD: string;
+    ESTOQUE: string;
+    QTDSEPARADA: string;
+    USUARIO: string;
+    UNIDADE: string;
+    OP: number;
+    LOTE: string;
+  }
+): Promise<any> => {
   const requestBody = {
     serviceName: "CRUDServiceProvider.saveRecord",
     requestBody: {
@@ -1148,6 +1276,7 @@ export const registrarRetiradaAlmoxarifado = async (data: {
           localFields: {
             CODPROD: { "$": data.CODPROD },
             DESCRPROD: { "$": data.DESCRPROD },
+            STATUS: { "$": "2" }, // Status 2 para finalizado
             ESTOQUE: { "$": data.ESTOQUE }, // Agora será a quantidade da OP
             QTDSEPARADA: { "$": data.QTDSEPARADA },
             USUARIO: { "$": data.USUARIO },
@@ -1155,6 +1284,9 @@ export const registrarRetiradaAlmoxarifado = async (data: {
             LOTE: { "$": data.LOTE },
             OP: { "$": data.OP }
           }
+        },  
+        key: {
+          CODIGO: { "$": data.CODIGO } // Forçar inserção de novo registro
         },
         entity: {
           fieldset: {

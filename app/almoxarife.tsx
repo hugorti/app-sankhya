@@ -1,8 +1,9 @@
 // app/almoxarifado.tsx
+// app/almoxarifado.tsx
 import { View, Text, StyleSheet, ActivityIndicator, TextInput, TouchableOpacity, ScrollView, SafeAreaView, Modal, Alert, FlatList } from 'react-native';
 import { useState, useEffect } from 'react';
 import { useRouter } from 'expo-router';
-import api, { queryJson, registrarRetiradaAlmoxarifado, iniciarSeparacao, buscarDadosAtividadeEmbalagem, finalizarAtividadeEmbalagemComSession } from '@/services/api';
+import api, { queryJson, iniciarSeparacao, buscarDadosAtividadeEmbalagem, finalizarAtividadeEmbalagemComSession, atualizarStatusSeparacao, finalizarSeparacaoCompleta } from '@/services/api';
 import { useSession } from '@/hooks/useSession';
 import { Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -15,7 +16,11 @@ interface DadosSeparacao {
   USUARIO: string;
   OP: number;
   UNIDADE: string;
-  LOTE: string; // Adicionar campo LOTE
+  LOTE: string;
+}
+
+interface EstadoSeparacao {
+  USUARIO: string;
 }
 
 interface DadosAlmoxarifado {
@@ -33,6 +38,7 @@ interface DadosAlmoxarifado {
   OBSERVACAO: string;
   EXECUTANTE: string;
   separado?: DadosSeparacao;
+  emSeparacao?: EstadoSeparacao;
 }
 
 interface OPAberta {
@@ -54,7 +60,6 @@ export default function AlmoxarifadoScreen() {
   const [temAtividadeEmbalagem, setTemAtividadeEmbalagem] = useState(false);
   const [podeSepararItens, setPodeSepararItens] = useState(false);
 
-  // Estados para busca de endereço
   const [endereco, setEndereco] = useState('');
   const [modalVisible, setModalVisible] = useState(false);
   const [dadosEndereco, setDadosEndereco] = useState<any[]>([]);
@@ -62,7 +67,6 @@ export default function AlmoxarifadoScreen() {
   const [quantidadeRetirada, setQuantidadeRetirada] = useState('');
   const [modalMode, setModalMode] = useState<'lista' | 'confirmacao'>('lista');
 
-  // Novos estados para a lista de OPs abertas
   const [opsAbertas, setOpsAbertas] = useState<OPAberta[]>([]);
   const [loadingOps, setLoadingOps] = useState(true);
   const [modalOpsVisible, setModalOpsVisible] = useState(false);
@@ -78,21 +82,55 @@ export default function AlmoxarifadoScreen() {
   const [inicioTimestamp, setInicioTimestamp] = useState<number | null>(null);
 
   const [progressoFinalizacao, setProgressoFinalizacao] = useState(false);
-  // Buscar OPs abertas ao abrir a tela
+  const [codigoRegistro, setCodigoRegistro] = useState<number | null>(null);
+
   useEffect(() => {
     buscarOpsAbertas();
   }, []);
 
-const handleItemPress = async (item: any) => {
-  if (!item.separado && podeSepararItens) {
-    setCodProdSelecionado(item.COD_MP);
-    setEndereco('');
-    setModalVisible(true);
-    
-    // Carrega os endereços diretamente
-    await buscarEnderecosProduto(item.COD_MP);
-  }
-};
+  const verificarUsuarioSeparando = async (
+    codProd: number, 
+    op: number
+  ): Promise<string | null> => {
+    try {
+      const sql = `
+        SELECT USUARIO 
+        FROM AD_ALMOXARIFEWMS 
+        WHERE CODPROD = ${codProd} 
+          AND OP = ${op} 
+          AND STATUS = '1'
+      `;
+      
+      const result = await queryJson('DbExplorerSP.executeQuery', { sql });
+      
+      if (result.rows.length > 0 && result.rows[0][0]) {
+        return result.rows[0][0];
+      }
+      return null;
+    } catch (error) {
+      console.error('Erro ao verificar usuário separando:', error);
+      return null;
+    }
+  };
+
+  const handleItemPress = async (item: any) => {
+    if (!item.separado && podeSepararItens) {
+      const usuarioSeparando = await verificarUsuarioSeparando(item.COD_MP, Number(idiproc));
+      
+      if (usuarioSeparando && usuarioSeparando !== session?.username) {
+        Alert.alert(
+          'Item em Separação',
+          `Este item está sendo separado por: ${usuarioSeparando}`
+        );
+        return;
+      }
+
+      setCodProdSelecionado(item.COD_MP);
+      setEndereco('');
+      setModalVisible(true);
+      await buscarEnderecosProduto(item.COD_MP);
+    }
+  };
 
   const buscarOpsAbertas = async () => {
     try {
@@ -188,6 +226,7 @@ const handleItemPress = async (item: any) => {
     }
   };
 
+
   const handleIniciarSeparacao = async () => {
   if (!idiproc) {
     Alert.alert('Erro', 'Por favor, informe o número da OP primeiro');
@@ -209,10 +248,9 @@ const handleItemPress = async (item: any) => {
             setLoading(true);
             const resultado = await iniciarSeparacao({
               IDIPROC: Number(idiproc),
-              username: session?.username || '' // Adicionando username
+              username: session?.username || ''
             });
             
-            // Armazenar IDEIATV, IDIATV e inicioTimestamp para usar no finalizar
             setIdeiAtv(resultado.IDEIATV);
             setIdiAtv(resultado.IDIATV);
             
@@ -231,87 +269,111 @@ const handleItemPress = async (item: any) => {
   );
   };
 
-  const handleFinalizarSeparacao = async () => {
-    if (!idiproc) {
-      Alert.alert('Erro', 'Por favor, informe o número da OP primeiro');
-      return;
-    }
+ const handleFinalizarSeparacao = async () => {
+  if (!idiproc) {
+    Alert.alert('Erro', 'Por favor, informe o número da OP primeiro');
+    return;
+  }
 
-    Alert.alert(
-      'Confirmação',
-      'Tem certeza que deseja finalizar a separação?',
-      [
-        {
-          text: 'Cancelar',
-          style: 'cancel'
-        },
-        {
-          text: 'Confirmar',
-          onPress: async () => {
+  Alert.alert(
+    'Confirmação',
+    'Tem certeza que deseja finalizar a separação?',
+    [
+      {
+        text: 'Cancelar',
+        style: 'cancel'
+      },
+      {
+        text: 'Confirmar',
+        onPress: async () => {
+          try {
+            setLoading(true);
+            setProgressoFinalizacao(true);
+            
+            // 1. Limpar todos os bloqueios pendentes para esta OP
             try {
-              setLoading(true);
-              setProgressoFinalizacao(true); // Inicia a barra de progresso
-              
-              // 1. BUSCAR TODOS OS DADOS NECESSÁRIOS DE UMA VEZ
-              console.log('Buscando dados da atividade de embalagem...');
-              const dadosAtividade = await buscarDadosAtividadeEmbalagem(Number(idiproc));
-              
-              if (!dadosAtividade) {
-                throw new Error('Dados da atividade de embalagem não encontrados');
-              }
-
-              if (!dadosAtividade.IDIATV || !dadosAtividade.IDEFX || !dadosAtividade.IDPROC) {
-                throw new Error('Dados incompletos da atividade de embalagem');
-              }
-
-              console.log('Dados encontrados:', dadosAtividade);
-
-              // 2. Verificar se temos a session
-              const sessionStorage = await AsyncStorage.getItem('sankhya_session');
-              if (!sessionStorage) {
-                throw new Error('Sessão não encontrada. Faça login novamente.');
-              }
-
-              const sessionData = JSON.parse(sessionStorage);
-              const jsessionid = sessionData.jsessionid;
-
-              if (!jsessionid) {
-                throw new Error('Session ID não encontrado');
-              }
-
-              // 3. Finalizar a atividade de embalagem (usando função modificada)
-              console.log('Finalizando atividade de embalagem...');
-              const resultado = await finalizarAtividadeEmbalagemComSession({
-                IDIPROC: Number(idiproc),
-                IDEFX: dadosAtividade.IDEFX,
-                IDIATV: dadosAtividade.IDIATV,
-                IDPROC: dadosAtividade.IDPROC,
-                jsessionid: jsessionid
-              });
-
-              console.log('Atividade finalizada com sucesso:', resultado);
-
-              Alert.alert('Sucesso', 'Separação finalizada com sucesso!');
-              
-              // 4. Voltar para tela anterior ou limpar dados
-              setDados([]);
-              setIdiproc('');
-              setIdeiAtv(null);
-              setIdiAtv(null);
-              setInicioTimestamp(null);
-
-            } catch (error: any) {
-              console.error('Erro ao finalizar separação:', error);
-              Alert.alert('Erro', error instanceof Error ? error.message : 'Falha ao finalizar separação');
-            } finally {
-              setLoading(false);
-              setProgressoFinalizacao(false); // Para a barra de progresso
+              const sqlLimparBloqueios = `
+                UPDATE AD_ALMOXARIFEWMS 
+                SET STATUS = '2' 
+                WHERE OP = ${Number(idiproc)} AND STATUS = '1'
+              `;
+              await queryJson('DbExplorerSP.executeQuery', { sql: sqlLimparBloqueios });
+            } catch (error) {
+              console.error('Erro ao limpar bloqueios:', error);
             }
+
+            // 2. BUSCAR TODOS OS DADOS NECESSÁRIOS DE UMA VEZ
+            console.log('Buscando dados da atividade de embalagem...');
+            const dadosAtividade = await buscarDadosAtividadeEmbalagem(Number(idiproc));
+            
+            if (!dadosAtividade) {
+              throw new Error('Dados da atividade de embalagem não encontrados');
+            }
+
+            if (!dadosAtividade.IDIATV || !dadosAtividade.IDEFX || !dadosAtividade.IDPROC) {
+              throw new Error('Dados incompletos da atividade de embalagem');
+            }
+
+            console.log('Dados encontrados:', dadosAtividade);
+
+            const sessionStorage = await AsyncStorage.getItem('sankhya_session');
+            if (!sessionStorage) {
+              throw new Error('Sessão não encontrada. Faça login novamente.');
+            }
+
+            const sessionData = JSON.parse(sessionStorage);
+            const jsessionid = sessionData.jsessionid;
+
+            if (!jsessionid) {
+              throw new Error('Session ID não encontrado');
+            }
+
+            console.log('Finalizando atividade de embalagem...');
+            const resultado = await finalizarAtividadeEmbalagemComSession({
+              IDIPROC: Number(idiproc),
+              IDEFX: dadosAtividade.IDEFX,
+              IDIATV: dadosAtividade.IDIATV,
+              IDPROC: dadosAtividade.IDPROC,
+              jsessionid: jsessionid
+            });
+
+            console.log('Resultado completo:', resultado);
+
+            // VERIFICAR SE A ATUALIZAÇÃO DAS QUANTIDADES FOI BEM-SUCEDIDA
+            if (resultado.atualizacaoNota) {
+              if (resultado.atualizacaoNota.success) {
+                console.log('✅ Quantidades atualizadas com sucesso!');
+                if (resultado.atualizacaoNota.itensAtualizados > 0) {
+                  Alert.alert('Sucesso', `Separação finalizada com sucesso! ${resultado.atualizacaoNota.itensAtualizados} itens atualizados.`);
+                } else {
+                  Alert.alert('Sucesso', 'Separação finalizada! Nenhuma quantidade separada para atualizar.');
+                }
+              } else {
+                console.warn('⚠️ Atividade finalizada, mas falha na atualização:', resultado.atualizacaoNota.message);
+                Alert.alert('Atenção', `Atividade finalizada, mas: ${resultado.atualizacaoNota.message}`);
+              }
+            } else {
+              Alert.alert('Sucesso', 'Separação finalizada com sucesso!');
+            }
+            
+            setDados([]);
+            setIdiproc('');
+            setIdeiAtv(null);
+            setIdiAtv(null);
+            setInicioTimestamp(null);
+
+          } catch (error: any) {
+            console.error('Erro ao finalizar separação:', error);
+            Alert.alert('Erro', error instanceof Error ? error.message : 'Falha ao finalizar separação');
+          } finally {
+            setLoading(false);
+            setProgressoFinalizacao(false);
           }
         }
-      ]
-    );
-  };
+      }
+    ]
+  );
+};
 
  const buscarEnderecosProduto = async (codProd: number) => {
   try {
@@ -337,13 +399,11 @@ const handleItemPress = async (item: any) => {
     
     const res = await queryJson('DbExplorerSP.executeQuery', { sql });
     
-    // Buscar o estoque total do produto - manter como string para preservar casas decimais
     const sqlEstoque = `SELECT SUM(ESTOQUE) as TOTAL_ESTOQUE FROM TGFEST WHERE CODPROD = ${codProd}`;
     const resultEstoque = await queryJson('DbExplorerSP.executeQuery', { sql: sqlEstoque });
     
     let estoqueTotalStr = '0';
     if (resultEstoque.rows.length > 0 && resultEstoque.rows[0][0] !== null) {
-      // Manter como string para preservar o formato com casas decimais
       estoqueTotalStr = resultEstoque.rows[0][0].toString();
     }
     setEstoqueTotal(estoqueTotalStr);
@@ -354,7 +414,6 @@ const handleItemPress = async (item: any) => {
       setModalMode('lista');
       setModalVisible(true);
       
-      // Mostrar automaticamente os detalhes do primeiro endereço
       setEnderecoSelecionado(res.rows[0]);
       setDetalhesEnderecoVisivel(true);
     } else {
@@ -368,10 +427,68 @@ const handleItemPress = async (item: any) => {
   }
 };
 
-  const confirmarRetirada = async () => {
+const selecionarEndereco = async () => {
+  if (enderecoSelecionado) {
+    try {
+      const usuario = session?.username || "Usuário";
+      
+      const usuarioSeparando = await verificarUsuarioSeparando(codProdSelecionado!, Number(idiproc));
+      
+      if (usuarioSeparando && usuarioSeparando !== usuario) {
+        Alert.alert(
+          'Item já em separação',
+          `Este item está sendo separado por: ${usuarioSeparando}`
+        );
+        return;
+      }
+
+      const resultado = await atualizarStatusSeparacao(
+        codProdSelecionado!, 
+        1, 
+        usuario, 
+        Number(idiproc)
+      );
+      
+      let codigoRegistroExtraido = null;
+      
+      if (resultado.responseBody && resultado.responseBody.entities) {
+        if (resultado.responseBody.entities.entity && 
+            resultado.responseBody.entities.entity.CODIGO && 
+            resultado.responseBody.entities.entity.CODIGO["$"]) {
+          codigoRegistroExtraido = resultado.responseBody.entities.entity.CODIGO["$"];
+        }
+      }
+      
+      if (!codigoRegistroExtraido) {
+        throw new Error('Não foi possível extrair o código do registro');
+      }
+      
+      setCodigoRegistro(codigoRegistroExtraido);
+      setDadosEndereco([enderecoSelecionado]);
+      setModalMode('confirmacao');
+      
+      setDados(prev => prev.map(item => {
+        if (item.COD_MP === codProdSelecionado) {
+          return {
+            ...item,
+            emSeparacao: {
+              USUARIO: usuario
+            }
+          };
+        }
+        return item;
+      }));
+      
+    } catch (error) {
+      console.error('Erro ao bloquear item:', error);
+      Alert.alert('Erro', 'Falha ao iniciar separação: ' + (error instanceof Error ? error.message : 'Erro desconhecido'));
+    }
+  }
+};
+
+const confirmarRetirada = async () => {
   if (!dadosEndereco.length || codProdSelecionado === null) return;
 
-  // Encontrar o item correspondente na lista de dados
   const itemOP = dados.find(item => item.COD_MP === codProdSelecionado);
   if (!itemOP) {
     Alert.alert('Erro', 'Item não encontrado na OP');
@@ -382,16 +499,12 @@ const handleItemPress = async (item: any) => {
   const codProd = d[0];
   const descricaoProduto = d[1];
   
-  // MANTER A QUANTIDADE ORIGINAL DA OP (com casas decimais)
-  // Extrair a parte numérica e a unidade separadamente
   const quantidadeMatch = itemOP.QUANTIDADE.match(/(\d+[,.]?\d*)\s*([a-zA-Z]*)/);
   
-  // Converter vírgula para ponto para o cálculo numérico
   const quantidadeOPString = quantidadeMatch ? quantidadeMatch[1].replace(',', '.') : '0';
   const quantidadeOPNumerica = parseFloat(quantidadeOPString) || 0;
   const unidadeOP = quantidadeMatch ? quantidadeMatch[2] : itemOP.UNIDADE || 'UN';
   
-  // Manter a string original para exibição e registro
   const quantidadeOPOriginal = itemOP.QUANTIDADE;
   
   const qtdRetirar = quantidadeRetirada;
@@ -408,7 +521,6 @@ const handleItemPress = async (item: any) => {
     return;
   }
 
-  // Validar se tem exatamente 3 casas decimais
   const parts = qtdRetirar.split('.');
   if (parts.length === 2 && parts[1].length !== 3) {
     Alert.alert(
@@ -418,7 +530,6 @@ const handleItemPress = async (item: any) => {
     return;
   }
 
-  // Converter a quantidade retirada para número (já está com ponto)
   const qtdRetirarNumerica = parseFloat(qtdRetirar);
 
   if (isNaN(qtdRetirarNumerica) || qtdRetirarNumerica <= 0) {
@@ -426,7 +537,6 @@ const handleItemPress = async (item: any) => {
     return;
   }
 
-  // Comparação CORRETA com casas decimais (ambos convertidos para número com ponto)
   if (qtdRetirarNumerica < quantidadeOPNumerica) {
     Alert.alert(
       'Erro', 
@@ -435,7 +545,6 @@ const handleItemPress = async (item: any) => {
     return;
   }
 
-  // VERIFICAR ESTOQUE DISPONÍVEL
   try {
     const sqlEstoque = `SELECT SUM(ESTOQUE) as TOTAL_ESTOQUE FROM TGFEST WHERE CODPROD = ${codProd}`;
     const resultEstoque = await queryJson('DbExplorerSP.executeQuery', { sql: sqlEstoque });
@@ -460,16 +569,22 @@ const handleItemPress = async (item: any) => {
   }
 
   try {
-    await registrarRetiradaAlmoxarifado({
-      CODPROD: codProd,
-      DESCRPROD: descricaoProduto,
-      ESTOQUE: quantidadeOPOriginal, // Usar a string ORIGINAL com casas decimais
-      QTDSEPARADA: qtdRetirar,
-      USUARIO: usuario,
-      OP: Number(idiproc),
-      UNIDADE: unidadeOP, // Usar a unidade extraída
-      LOTE: lote
-    });
+    if (!codigoRegistro) {
+      throw new Error('Código do registro não encontrado');
+    }
+
+    await finalizarSeparacaoCompleta({
+        CODIGO: codigoRegistro,
+        CODPROD: codProd,
+        DESCRPROD: descricaoProduto,
+        ESTOQUE: quantidadeOPOriginal,
+        QTDSEPARADA: qtdRetirar,
+        USUARIO: usuario,
+        OP: Number(idiproc),
+        UNIDADE: unidadeOP,
+        LOTE: lote,
+        STATUS: "2"
+      });
 
     setDados(prev => prev.map(item => {
       if (item.COD_MP === codProd) {
@@ -478,13 +593,14 @@ const handleItemPress = async (item: any) => {
           separado: {
             CODPROD: codProd,
             DESCRPROD: descricaoProduto,
-            ESTOQUE: quantidadeOPOriginal, // Manter a original
+            ESTOQUE: quantidadeOPOriginal,
             QTDSEPARADA: qtdRetirar,
             USUARIO: usuario,
             OP: Number(idiproc),
             UNIDADE: unidadeOP,
             LOTE: lote
-          }
+          },
+          emSeparacao: undefined
         };
       }
       return item;
@@ -495,17 +611,14 @@ const handleItemPress = async (item: any) => {
     setEndereco('');
     setQuantidadeRetirada('');
     setLoteRetirada('');
+    setCodigoRegistro(null);
     Alert.alert('Sucesso', 'Retirada registrada com sucesso!');
   } catch (error) {
     console.error('Erro na retirada:', error);
     let errorMessage = 'Falha ao registrar retirada';
     
     if (error instanceof Error) {
-      if (error.message.includes('Campos de estoque não compatíveis')) {
-        errorMessage = 'Erro de compatibilidade de unidades. Verifique se a quantidade está na unidade correta.';
-      } else {
-        errorMessage = error.message;
-      }
+      errorMessage = error.message;
     }
     
     Alert.alert('Erro', errorMessage);
@@ -518,7 +631,7 @@ const handleItemPress = async (item: any) => {
       SELECT 
         CODPROD, DESCRPROD, QTDSEPARADA, USUARIO, OP, UNIDADE, LOTE
       FROM AD_ALMOXARIFEWMS
-      WHERE OP = ${idiproc}
+      WHERE OP = ${idiproc} AND STATUS = '2'
     `;
     
     const result = await queryJson('DbExplorerSP.executeQuery', { sql });
@@ -531,7 +644,7 @@ const handleItemPress = async (item: any) => {
         USUARIO: row[3],
         OP: row[4],
         UNIDADE: row[5] || 'UN',
-        LOTE: row[6] || '' // Incluir o lote
+        LOTE: row[6] || ''
       }));
     }
     return [];
@@ -539,7 +652,7 @@ const handleItemPress = async (item: any) => {
     console.error('Erro ao buscar separações:', error);
     return [];
   }
-  };
+};
 
   const buscarDados = async () => {
     if (!session?.jsessionid || !idiproc.trim()) return;
@@ -645,7 +758,7 @@ const handleItemPress = async (item: any) => {
             COD_MP: codProdMP,
             PRODUTOMP: row[5],
             QUANTIDADE: row[6],
-            UNIDADE: row[8], // Unidade da OP
+            UNIDADE: row[8],
             SEQUENCIA: row[9],
             FASE: row[10],
             TEMPERATURA: row[11],
@@ -676,7 +789,6 @@ const handleItemPress = async (item: any) => {
     if (dados.length === 0) return false;
     return dados.every(item => item.separado);
   };
-
   return (
   <SafeAreaView style={styles.container}>
     <View style={styles.header}>
@@ -706,7 +818,6 @@ const handleItemPress = async (item: any) => {
         </TouchableOpacity>
 
         <View style={styles.buttonGroup}>
-          {/* Mostrar botão Iniciar apenas se DHINICIO for null */}
           {!separacaoIniciada && (
             <TouchableOpacity 
               style={[
@@ -723,7 +834,6 @@ const handleItemPress = async (item: any) => {
             </TouchableOpacity>
           )}
 
-          {/* Mostrar botão Finalizar apenas se DHINICIO não for null e DHFINAL for null */}
           {separacaoIniciada && !separacaoFinalizada && (
             <TouchableOpacity 
               style={[
@@ -741,7 +851,6 @@ const handleItemPress = async (item: any) => {
             </TouchableOpacity>
           )}
 
-          {/* Mostrar mensagem quando separação estiver finalizada */}
           {separacaoFinalizada && (
             <View style={styles.statusMessage}>
               <Ionicons name="checkmark-done" size={20} color="#2e7d32" />
@@ -760,22 +869,24 @@ const handleItemPress = async (item: any) => {
       <FlatList
         data={dados}
         keyExtractor={(item, index) => index.toString()}
-        scrollEnabled={false} // Desabilita scroll pois já está dentro de ScrollView
+        scrollEnabled={false}
         renderItem={({ item }) => (
           <TouchableOpacity
             style={[
               styles.materialCard,
               item.separado && styles.separadoCard,
-              !podeSepararItens && styles.itemDisabled
+              item.emSeparacao && styles.emSeparacaoCard,
+              (!podeSepararItens || item.emSeparacao) && styles.itemDisabled
             ]}
             onPress={() => {
-              if (!item.separado && podeSepararItens) {
+              if (!item.separado && podeSepararItens && !item.emSeparacao) {
                 setCodProdSelecionado(item.COD_MP);
                 setEndereco('');
                 setModalVisible(true);
-                handleItemPress(item)
+                handleItemPress(item);
               }
             }}
+            // disabled={!podeSepararItens || item.emSeparacao}
           >
             <View style={styles.materialHeader}>
               <Text style={styles.materialValue}>{item.COD_MP} - {item.PRODUTOMP}</Text>
@@ -786,6 +897,15 @@ const handleItemPress = async (item: any) => {
               <Text style={styles.materialQuantity}>Qtd OP: {item.QUANTIDADE}</Text>
             </View>
 
+            {item.emSeparacao && !item.separado && (
+              <View style={styles.emSeparacaoContainer}>
+                <Ionicons name="lock-closed" size={16} color="#ff9800" />
+                <Text style={styles.emSeparacaoText}>
+                  Em separação por: {item.emSeparacao.USUARIO}
+                </Text>
+              </View>
+            )}
+            
             {item.separado && (
               <View style={styles.separadoContainer}>
                 <View style={styles.separadoRow}>
@@ -795,8 +915,6 @@ const handleItemPress = async (item: any) => {
                 <View style={styles.separadoDetails}>
                   <Text style={styles.separadoDetail}>Qtd: {item.separado.QTDSEPARADA} </Text>
                   <Text style={styles.separadoDetail}>Por: {item.separado.USUARIO}</Text>
-                  {/* Exibir lote na separação concluída */}
-                  {/* <Text style={styles.separadoDetail}>Lote: {item.separado.LOTE}</Text> */}
                 </View>
               </View>
             )}
@@ -839,7 +957,6 @@ const handleItemPress = async (item: any) => {
             </Text>
           )}
           
-          {/* Botão para recarregar a lista */}
           <View style={styles.reloadButton}>
             <TouchableOpacity
               style={styles.refreshButton}
@@ -867,14 +984,12 @@ const handleItemPress = async (item: any) => {
           {loading ? (
             <ActivityIndicator size="large" color="#4CAF50" />
           ) : modalMode === 'confirmacao' ? (
-            /* VIEW DE CONFIRMAÇÃO */
             dadosEndereco.length > 0 && dadosEndereco[0] ? (
               <ScrollView style={styles.modalScrollView}>
                 <Text style={styles.modalTitle}>
                   Confirmar Retirada
                 </Text>
                 
-                {/* Encontrar o itemOP dentro do modal */}
                 {(() => {
                   const itemOPModal = dados.find(item => item.COD_MP === codProdSelecionado);
                   return (
@@ -885,9 +1000,6 @@ const handleItemPress = async (item: any) => {
                       <Text style={{ marginBottom: 8 }}>
                         <Text style={{ fontWeight: 'bold' }}>Endereço:</Text> {dadosEndereco[0][2]}
                       </Text>
-                      {/* <Text style={{ marginBottom: 8 }}>
-                        <Text style={{ fontWeight: 'bold' }}>Lote OP:</Text> {itemOPModal?.LOTE || 'N/A'}
-                      </Text> */}
                       <Text style={{ marginBottom: 16 }}>
                         <Text style={{ fontWeight: 'bold' }}>Qtd OP:</Text> {itemOPModal?.QUANTIDADE || 'N/A'}
                       </Text>
@@ -909,32 +1021,24 @@ const handleItemPress = async (item: any) => {
                         keyboardType="numeric"
                         value={quantidadeRetirada}
                         onChangeText={(text) => {
-                          // Substitui vírgula por ponto
                           let formattedText = text.replace(',', '.');
-                          
-                          // Remove caracteres não numéricos exceto ponto
                           formattedText = formattedText.replace(/[^0-9.]/g, '');
                           
-                          // Permite apenas um ponto decimal
                           const parts = formattedText.split('.');
                           if (parts.length > 2) {
                             formattedText = parts[0] + '.' + parts.slice(1).join('');
                           }
                           
-                          // Força exatamente 3 casas decimais após o ponto
                           if (parts.length === 2) {
                             if (parts[1].length > 3) {
                               formattedText = parts[0] + '.' + parts[1].substring(0, 3);
                             } else if (parts[1].length < 3) {
-                              // Não completa automaticamente, mas permite digitar
-                              // O usuário precisa digitar as 3 casas
                               formattedText = parts[0] + '.' + parts[1];
                             }
                           }
                           
                           setQuantidadeRetirada(formattedText);
                         }}
-                        // Adiciona validação no blur para forçar 3 casas
                         onBlur={() => {
                           const parts = quantidadeRetirada.split('.');
                           if (parts.length === 2 && parts[1].length !== 3) {
@@ -946,7 +1050,6 @@ const handleItemPress = async (item: any) => {
                           }
                         }}
                       />
-
 
                       <TouchableOpacity
                         style={[
@@ -984,57 +1087,43 @@ const handleItemPress = async (item: any) => {
               </View>
             )
           ) : (
-            /* VIEW DE SELEÇÃO */
             <ScrollView style={styles.modalScrollView}>
               <Text style={styles.modalTitle}>
                 {dadosEndereco[0]?.[0] || 'Produto'} - {dadosEndereco[0]?.[1] || 'Produto'}
               </Text>
-                {/* Informações detalhadas do endereço selecionado */}
-                {detalhesEnderecoVisivel && enderecoSelecionado && (
-                  <View style={styles.detalhesEndereco}>
-                    <Text style={styles.detalhesTitulo}>Informações do Endereço:</Text>
-                      <FlatList
-                        data={dadosEndereco}
-                        keyExtractor={(item, index) => index.toString()}
-                        style={styles.enderecoList}
-                        scrollEnabled={false}
-                        renderItem={({ item }) => (
-                          <TouchableOpacity
-                            style={[
-                              styles.enderecoItem,
-                              enderecoSelecionado === item && styles.enderecoItemSelected
-                            ]}
-                            onPress={() => {
-                              setEnderecoSelecionado(item);
-                              setDetalhesEnderecoVisivel(true);
-                            }}
-                          >
-                            <Text style={styles.enderecoText}>📍 {item[2]}</Text>
-                          </TouchableOpacity>
-                        )}
-                      />
-                  </View>
-                )}
-
-              {/* <TouchableOpacity
-                style={[styles.searchButton, { marginTop: 16, opacity: endereco ? 1 : 0.5 }]}
-                onPress={buscarEnderecoEspecifico}
-                disabled={!endereco}
-              >
-                <Text style={styles.searchButtonText}>Buscar Endereço</Text>
-              </TouchableOpacity> */}
+              
+              {detalhesEnderecoVisivel && enderecoSelecionado && (
+                <View style={styles.detalhesEndereco}>
+                  <Text style={styles.detalhesTitulo}>Informações do Endereço:</Text>
+                  <FlatList
+                    data={dadosEndereco}
+                    keyExtractor={(item, index) => index.toString()}
+                    style={styles.enderecoList}
+                    scrollEnabled={false}
+                    renderItem={({ item }) => (
+                      <TouchableOpacity
+                        style={[
+                          styles.enderecoItem,
+                          enderecoSelecionado === item && styles.enderecoItemSelected
+                        ]}
+                        onPress={() => {
+                          setEnderecoSelecionado(item);
+                          setDetalhesEnderecoVisivel(true);
+                        }}
+                      >
+                        <Text style={styles.enderecoText}>📍 {item[2]}</Text>
+                      </TouchableOpacity>
+                    )}
+                  />
+                </View>
+              )}
 
               <TouchableOpacity
                 style={[
                   styles.selectButton,
                   { opacity: enderecoSelecionado ? 1 : 0.5 }
                 ]}
-                onPress={() => {
-                  if (enderecoSelecionado) {
-                    setDadosEndereco([enderecoSelecionado]);
-                    setModalMode('confirmacao');
-                  }
-                }}
+                onPress={selecionarEndereco}
                 disabled={!enderecoSelecionado}
               >
                 <Text style={styles.buttonText}>Selecionar Endereço</Text>
@@ -1430,5 +1519,23 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     marginTop: 10,
     color: '#666',
+  },
+  emSeparacaoCard: {
+    backgroundColor: '#fff3e0',
+    borderLeftColor: '#ff9800',
+  },
+  emSeparacaoContainer: {
+    marginTop: 8,
+    paddingTop: 8,
+    borderTopWidth: 1,
+    borderTopColor: '#ffe0b2',
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  emSeparacaoText: {
+    color: '#ff9800',
+    fontSize: 14,
+    marginLeft: 4,
+    fontWeight: '500',
   },
 });
