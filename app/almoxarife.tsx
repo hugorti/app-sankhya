@@ -77,6 +77,7 @@ export default function AlmoxarifadoScreen() {
 
   const [inicioTimestamp, setInicioTimestamp] = useState<number | null>(null);
 
+  const [progressoFinalizacao, setProgressoFinalizacao] = useState(false);
   // Buscar OPs abertas ao abrir a tela
   useEffect(() => {
     buscarOpsAbertas();
@@ -214,7 +215,6 @@ const handleItemPress = async (item: any) => {
             // Armazenar IDEIATV, IDIATV e inicioTimestamp para usar no finalizar
             setIdeiAtv(resultado.IDEIATV);
             setIdiAtv(resultado.IDIATV);
-            setInicioTimestamp(resultado.inicioTimestamp); // Armazenar timestamp
             
             setSeparacaoIniciada(true);
             setPodeSepararItens(true);
@@ -229,93 +229,89 @@ const handleItemPress = async (item: any) => {
       }
     ]
   );
-};
+  };
 
-const handleFinalizarSeparacao = async () => {
-  if (!idiproc) {
-    Alert.alert('Erro', 'Por favor, informe o número da OP primeiro');
-    return;
-  }
+  const handleFinalizarSeparacao = async () => {
+    if (!idiproc) {
+      Alert.alert('Erro', 'Por favor, informe o número da OP primeiro');
+      return;
+    }
 
-  // Verificar se temos os IDs necessários
-  if (!ideiAtv || !idiAtv || !inicioTimestamp) {
-    Alert.alert('Erro', 'Dados de separação incompletos. Reinicie o processo.');
-    return;
-  }
+    Alert.alert(
+      'Confirmação',
+      'Tem certeza que deseja finalizar a separação?',
+      [
+        {
+          text: 'Cancelar',
+          style: 'cancel'
+        },
+        {
+          text: 'Confirmar',
+          onPress: async () => {
+            try {
+              setLoading(true);
+              setProgressoFinalizacao(true); // Inicia a barra de progresso
+              
+              // 1. BUSCAR TODOS OS DADOS NECESSÁRIOS DE UMA VEZ
+              console.log('Buscando dados da atividade de embalagem...');
+              const dadosAtividade = await buscarDadosAtividadeEmbalagem(Number(idiproc));
+              
+              if (!dadosAtividade) {
+                throw new Error('Dados da atividade de embalagem não encontrados');
+              }
 
-  Alert.alert(
-    'Confirmação',
-    'Tem certeza que deseja finalizar a separação?',
-    [
-      {
-        text: 'Cancelar',
-        style: 'cancel'
-      },
-      {
-        text: 'Confirmar',
-        onPress: async () => {
-          try {
-            setLoading(true);
-            
-            // 1. BUSCAR TODOS OS DADOS NECESSÁRIOS DE UMA VEZ
-            console.log('Buscando dados da atividade de embalagem...');
-            const dadosAtividade = await buscarDadosAtividadeEmbalagem(Number(idiproc));
-            
-            if (!dadosAtividade) {
-              throw new Error('Dados da atividade de embalagem não encontrados');
+              if (!dadosAtividade.IDIATV || !dadosAtividade.IDEFX || !dadosAtividade.IDPROC) {
+                throw new Error('Dados incompletos da atividade de embalagem');
+              }
+
+              console.log('Dados encontrados:', dadosAtividade);
+
+              // 2. Verificar se temos a session
+              const sessionStorage = await AsyncStorage.getItem('sankhya_session');
+              if (!sessionStorage) {
+                throw new Error('Sessão não encontrada. Faça login novamente.');
+              }
+
+              const sessionData = JSON.parse(sessionStorage);
+              const jsessionid = sessionData.jsessionid;
+
+              if (!jsessionid) {
+                throw new Error('Session ID não encontrado');
+              }
+
+              // 3. Finalizar a atividade de embalagem (usando função modificada)
+              console.log('Finalizando atividade de embalagem...');
+              const resultado = await finalizarAtividadeEmbalagemComSession({
+                IDIPROC: Number(idiproc),
+                IDEFX: dadosAtividade.IDEFX,
+                IDIATV: dadosAtividade.IDIATV,
+                IDPROC: dadosAtividade.IDPROC,
+                jsessionid: jsessionid
+              });
+
+              console.log('Atividade finalizada com sucesso:', resultado);
+
+              Alert.alert('Sucesso', 'Separação finalizada com sucesso!');
+              
+              // 4. Voltar para tela anterior ou limpar dados
+              setDados([]);
+              setIdiproc('');
+              setIdeiAtv(null);
+              setIdiAtv(null);
+              setInicioTimestamp(null);
+
+            } catch (error: any) {
+              console.error('Erro ao finalizar separação:', error);
+              Alert.alert('Erro', error instanceof Error ? error.message : 'Falha ao finalizar separação');
+            } finally {
+              setLoading(false);
+              setProgressoFinalizacao(false); // Para a barra de progresso
             }
-
-            if (!dadosAtividade.IDIATV || !dadosAtividade.IDEFX || !dadosAtividade.IDPROC) {
-              throw new Error('Dados incompletos da atividade de embalagem');
-            }
-
-            console.log('Dados encontrados:', dadosAtividade);
-
-            // 2. Verificar se temos a session
-            const sessionStorage = await AsyncStorage.getItem('sankhya_session');
-            if (!sessionStorage) {
-              throw new Error('Sessão não encontrada. Faça login novamente.');
-            }
-
-            const sessionData = JSON.parse(sessionStorage);
-            const jsessionid = sessionData.jsessionid;
-
-            if (!jsessionid) {
-              throw new Error('Session ID não encontrado');
-            }
-
-            // 3. Finalizar a atividade de embalagem (usando função modificada)
-            console.log('Finalizando atividade de embalagem...');
-            const resultado = await finalizarAtividadeEmbalagemComSession({
-              IDIPROC: Number(idiproc),
-              IDEFX: dadosAtividade.IDEFX,
-              IDIATV: dadosAtividade.IDIATV,
-              IDPROC: dadosAtividade.IDPROC,
-              jsessionid: jsessionid
-            });
-
-            console.log('Atividade finalizada com sucesso:', resultado);
-
-            Alert.alert('Sucesso', 'Separação finalizada com sucesso!');
-            
-            // 4. Voltar para tela anterior ou limpar dados
-            setDados([]);
-            setIdiproc('');
-            setIdeiAtv(null);
-            setIdiAtv(null);
-            setInicioTimestamp(null);
-
-          } catch (error: any) {
-            console.error('Erro ao finalizar separação:', error);
-            Alert.alert('Erro', error instanceof Error ? error.message : 'Falha ao finalizar separação');
-          } finally {
-            setLoading(false);
           }
         }
-      }
-    ]
-  );
-};
+      ]
+    );
+  };
 
  const buscarEnderecosProduto = async (codProd: number) => {
   try {
@@ -1063,6 +1059,15 @@ const handleFinalizarSeparacao = async () => {
         </View>
       </View>
     </Modal>
+
+    {progressoFinalizacao && (
+      <View style={styles.progressContainer}>
+        <View style={styles.progressBar}>
+          <ActivityIndicator size="large" color="#4CAF50" />
+          <Text style={styles.progressText}>Finalizando separação...</Text>
+        </View>
+      </View>
+    )}
   </SafeAreaView>
 );
 }
@@ -1080,6 +1085,30 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: '#666',
     marginTop: 4,
+  },
+  progressContainer: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    zIndex: 1000,
+  },
+  progressBar: {
+    backgroundColor: 'white',
+    padding: 20,
+    borderRadius: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  progressText: {
+    marginTop: 10,
+    fontSize: 16,
+    fontWeight: 'bold',
+    color: '#333',
   },
   header: {
     flexDirection: 'row',

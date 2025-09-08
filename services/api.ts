@@ -22,6 +22,7 @@ interface LoginResponse {
   jsessionid: string;
   idusu: string;
   callID: string;
+  transactionId: string;
 }
 
 let currentBaseURL = `http://${DEFAULT_URL}/mge/`;
@@ -29,6 +30,20 @@ let inactivityTimer: number | null = null;
 let lastActivityTime: number | null = null;
 let onInactiveCallback: (() => Promise<void>) | null = null;
 let appStateSubscription: { remove: () => void } | null = null;
+
+// Adicione esta função para criar uma instância do axios para mgeprod
+const createMgeprodApi = (baseURL: string): AxiosInstance => {
+  const mgeprodBaseURL = baseURL.replace('/mge/', '/mgeprod/');
+  
+  return axios.create({
+    baseURL: mgeprodBaseURL,
+    timeout: 15000,
+    headers: {
+      'Content-Type': 'application/json',
+      'Accept': 'application/json'
+    }
+  });
+};
 
 // Funções para gerenciar inatividade
 export const setupInactivityListener = (callback: () => Promise<void>) => {
@@ -266,6 +281,7 @@ export const login = async (username: string, password: string): Promise<LoginRe
   try {
     // Limpa qualquer timer pendente
     clearInactivityTimer();
+    
     const response = await api.post(
       'services.sbr?serviceName=MobileLoginSP.login',
       xmlRequest,
@@ -303,10 +319,18 @@ export const login = async (username: string, password: string): Promise<LoginRe
       throw new Error('Dados de sessão incompletos na resposta');
     }
 
+    // Extrair transactionId do serviceResponse
+    const transactionId = result.serviceResponse['@_transactionId'] || '';
+    
+    if (!transactionId) {
+      console.warn('TransactionId não encontrado na resposta do login');
+    }
+
     const sessionData: LoginResponse = {
       jsessionid: result.serviceResponse.responseBody.jsessionid,
       idusu: result.serviceResponse.responseBody.idusu.trim(),
-      callID: result.serviceResponse.responseBody.callID || ''
+      callID: result.serviceResponse.responseBody.callID || '',
+      transactionId: transactionId
     };
 
     await AsyncStorage.setItem('sankhya_session', JSON.stringify({
@@ -315,13 +339,15 @@ export const login = async (username: string, password: string): Promise<LoginRe
       timestamp: Date.now()
     }));
     
-        setupInactivityListener(async () => {
+    setupInactivityListener(async () => {
       console.log('Sessão expirada por inatividade');
     });
 
+    console.log('Login realizado com sucesso. TransactionId:', transactionId);
     return sessionData;
 
   } catch (error) {
+    console.error('Erro no login:', error);
     throw new Error(
       axios.isAxiosError(error)
         ? 'Erro de conexão com o servidor'
@@ -527,6 +553,184 @@ export const buscarDadosAtividadeEmbalagem = async (idiproc: number): Promise<{
   }
 };
 
+export const buscarQuantidadesSeparadas = async (nunota: number): Promise<Array<{CODPROD: number, QTDSEPARADA: number}>> => {
+  try {
+    const sql = `
+      SELECT DISTINCT
+        AD.CODPROD,
+        AD.QTDSEPARADA
+      FROM TGFCAB CAB 
+      JOIN TGFITE ITE 
+        ON ITE.NUNOTA = CAB.NUNOTA
+      JOIN AD_ALMOXARIFEWMS AD 
+        ON AD.OP = CAB.IDIPROC
+        AND AD.CODPROD = ITE.CODPROD
+      WHERE CAB.NUNOTA = ${nunota};
+    `;
+    
+    const result = await queryJson('DbExplorerSP.executeQuery', { sql });
+    
+    if (result.rows.length === 0) {
+      return [];
+    }
+
+    return result.rows.map((row: any) => ({
+      CODPROD: row[0],
+      QTDSEPARADA: parseFloat(row[1]) || 0
+    }));
+
+  } catch (error) {
+    console.error('Erro ao buscar quantidades separadas:', error);
+    throw new Error('Falha ao buscar quantidades separadas');
+  }
+};
+
+// Função para buscar as sequências dos itens da nota
+export const buscarSequenciasItensNota = async (nunota: number): Promise<Array<{CODPROD: number, SEQUENCIA: number, QTDORIGINAL: number}>> => {
+  try {
+    const sql = `
+      SELECT CODPROD, SEQUENCIA, QTDNEG
+      FROM TGFITE
+      WHERE NUNOTA = ${nunota}
+      ORDER BY SEQUENCIA;
+    `;
+    
+    const result = await queryJson('DbExplorerSP.executeQuery', { sql });
+    
+    if (result.rows.length === 0) {
+      return [];
+    }
+
+    return result.rows.map((row: any) => ({
+      CODPROD: row[0],
+      SEQUENCIA: row[1],
+      QTDORIGINAL: parseFloat(row[2]) || 0
+    }));
+
+  } catch (error) {
+    console.error('Erro ao buscar sequências dos itens:', error);
+    throw new Error('Falha ao buscar itens da nota');
+  }
+};
+
+// Função principal para atualizar as quantidades na nota
+export const atualizarQuantidadesNota = async (nunota: number): Promise<any> => {
+  try {
+    console.log('Iniciando atualização da nota:', nunota);
+    
+    // 1. Buscar quantidades separadas
+    const quantidadesSeparadas = await buscarQuantidadesSeparadas(nunota);
+    if (quantidadesSeparadas.length === 0) {
+      console.log('Nenhuma quantidade separada encontrada para a nota:', nunota);
+      return { success: true, message: 'Nenhuma quantidade para atualizar' };
+    }
+
+    console.log('Quantidades separadas encontradas:', quantidadesSeparadas);
+
+    // 2. Buscar sequências dos itens da nota
+    const itensNota = await buscarSequenciasItensNota(nunota);
+    if (itensNota.length === 0) {
+      throw new Error('Nenhum item encontrado na nota');
+    }
+
+    console.log('Itens da nota encontrados:', itensNota);
+
+    // 3. Atualizar cada item
+    const resultados = [];
+    
+    for (const item of itensNota) {
+      // Encontrar a quantidade separada correspondente
+      const qtdSeparada = quantidadesSeparadas.find(q => q.CODPROD === item.CODPROD);
+      
+      if (qtdSeparada && qtdSeparada.QTDSEPARADA > 0) {
+        console.log(`Atualizando produto ${item.CODPROD}: ${item.QTDORIGINAL} -> ${qtdSeparada.QTDSEPARADA}`);
+        
+        const resultado = await atualizarItemNota({
+          NUNOTA: nunota,
+          CODPROD: item.CODPROD,
+          SEQUENCIA: item.SEQUENCIA,
+          QTDNEG: qtdSeparada.QTDSEPARADA
+        });
+        
+        resultados.push(resultado);
+      }
+    }
+
+    console.log('Atualização concluída para nota:', nunota);
+    return {
+      success: true,
+      message: `Nota ${nunota} atualizada com sucesso`,
+      itensAtualizados: resultados.length,
+      detalhes: resultados
+    };
+
+  } catch (error) {
+    console.error('Erro ao atualizar quantidades da nota:', error);
+    throw error;
+  }
+};
+
+// Função para atualizar um item específico da nota
+export const atualizarItemNota = async (data: {
+  NUNOTA: number;
+  CODPROD: number;
+  SEQUENCIA: number;
+  QTDNEG: number;
+}): Promise<any> => {
+  try {
+    const requestBody = {
+      serviceName: "CRUDServiceProvider.saveRecord",
+      requestBody: {
+        dataSet: {
+          rootEntity: "ItemNota",
+          includePresentationFields: "N",
+          dataRow: {
+            localFields: {
+              CODPROD: { "$": data.CODPROD },
+              QTDNEG: { "$": data.QTDNEG.toString() },
+              SEQUENCIA: { "$": data.SEQUENCIA }
+            },
+            key: {
+              NUNOTA: { "$": data.NUNOTA }
+            }
+          },
+          entity: {
+            fieldset: {
+              list: "NUNOTA, CODPROD, QTDNEG, SEQUENCIA"
+            }
+          }
+        }
+      }
+    };
+
+    console.log('Atualizando item:', data);
+    
+    const response = await api.post(
+      'mge/service.sbr?serviceName=CRUDServiceProvider.saveRecord&outputType=json',
+      requestBody,
+      { headers: { 'Content-Type': 'application/json' } }
+    );
+
+    console.log('Resposta da atualização:', response.data);
+
+    if (response.data.status !== "1") {
+      throw new Error(response.data.statusMessage || 'Erro ao atualizar item');
+    }
+
+    return {
+      success: true,
+      CODPROD: data.CODPROD,
+      SEQUENCIA: data.SEQUENCIA,
+      QTDNEG: data.QTDNEG
+    };
+
+  } catch (error) {
+    console.error('Erro ao atualizar item da nota:', error);
+    throw error;
+  }
+};
+
+
 export const iniciarSeparacao = async (data: {
   IDIPROC: number;
   username: string;
@@ -690,39 +894,237 @@ export const finalizarAtividadeEmbalagemComSession = async (data: {
       }
     };
 
-     const url = `mgeprod/service.sbr?serviceName=OperacaoProducaoSP.finalizarInstanciaAtividades&outputType=json&preventTransform=false&mgeSession=${data.jsessionid}`;
-    console.log('Enviando requisição para finalizar atividade...');
+    // Criar instância específica para mgeprod
+    const mgeprodBaseURL = currentBaseURL.replace('/mge/', '/mgeprod/');
     
-    // USANDO SUA INSTÂNCIA API CONFIGURADA
-    const response = await api.post(
-      url,
-      requestBody,
-      { 
-        headers: { 
-          'Content-Type': 'application/json',
-          'Accept': 'application/json'
-        },
-        timeout: 15000
+    // USAR AXIOS DIRECTAMENTE SEM INSTÂNCIA PARA EVITAR INTERCEPTORS
+    const url = `${mgeprodBaseURL}service.sbr?serviceName=OperacaoProducaoSP.finalizarInstanciaAtividades&application=OperacaoProducao&outputType=json&preventTransform=false&mgeSession=${data.jsessionid}`;
+    
+    console.log('Enviando requisição para finalizar atividade...');
+    console.log('URL completa:', url);
+
+    // USAR AXIOS DIRECTAMENTE COM CONFIGURAÇÃO SIMPLES
+    const response = await axios.post(url, requestBody, {
+      headers: { 
+        'Content-Type': 'application/json',
+        'Accept': 'application/json',
+        'Cookie': `JSESSIONID=${data.jsessionid}`
+      },
+      timeout: 30000,
+      // DESABILITAR transformResponse para ver a resposta raw
+      transformResponse: []
+    });
+
+    console.log('Resposta bruta do servidor:', response.data);
+
+    // MANUALMENTE PROCESSAR A RESPOSTA
+    let responseData;
+    try {
+      // Tentar parsear como JSON
+      responseData = typeof response.data === 'string' 
+        ? JSON.parse(response.data) 
+        : response.data;
+    } catch (parseError) {
+      console.log('Resposta não é JSON válido, tratando como texto:', response.data);
+      // Se não for JSON, verificar se contém indicadores de sucesso
+      if (response.data && response.data.includes('status') && response.data.includes('"1"')) {
+        responseData = { status: "1", success: true };
+      } else {
+        throw new Error('Resposta do servidor em formato inválido');
       }
-    );
-
-    console.log('Resposta do servidor:', response.data);
-
-    if (response.data.status !== "1") {
-      throw new Error(response.data.statusMessage || 'Erro ao finalizar InstanciaAtividade');
     }
 
-    return response.data.responseBody;
+    console.log('Resposta parseada:', responseData);
+
+    // VERIFICAR SE FOI BEM-SUCEDIDO
+    if (responseData && responseData.status === "1") {
+      console.log('✅ Atividade finalizada com sucesso!');
+      
+      // ⭐⭐ ATUALIZAR QUANTIDADES NA NOTA ⭐⭐
+      try {
+        if (responseData.responseBody && responseData.responseBody.pk && responseData.responseBody.pk.NUNOTA) {
+          const nunota = responseData.responseBody.pk.NUNOTA.$;
+          console.log('NUNOTA gerada:', nunota);
+          
+          // Atualizar quantidades na nota
+          const resultadoAtualizacao = await atualizarQuantidadesNota(parseInt(nunota));
+          console.log('Resultado da atualização:', resultadoAtualizacao);
+          
+          // Adicionar info da atualização na resposta
+          responseData.atualizacaoNota = resultadoAtualizacao;
+        } else {
+          console.log('NUNOTA não encontrada na resposta, pulando atualização');
+          responseData.atualizacaoNota = {
+            success: false,
+            message: 'NUNOTA não encontrada na resposta'
+          };
+        }
+      } catch (updateError: any) {
+        console.error('Erro ao atualizar nota, mas a atividade foi finalizada:', updateError);
+        // Não lançar erro aqui - a atividade principal foi bem-sucedida
+        responseData.atualizacaoNota = { 
+          success: false, 
+          error: updateError.message,
+          message: 'Atividade finalizada, mas falha na atualização da nota' 
+        };
+      }
+      
+      return responseData;
+    }
+
+    // SE STATUS NÃO FOR 1, LANÇAR ERRO
+    throw new Error(responseData.statusMessage || 'Erro ao finalizar atividade');
 
   } catch (error: any) {
-    console.error('Error finalizando atividade de embalagem:', error);
+    console.error('Error na finalização:', error);
     
-    // Log mais detalhado do erro
-    if (error.response) {
-      console.error('Resposta de erro:', error.response.data);
+    // VERIFICAR SE A RESPOSTA VEIO NO ERROR (COMUM NO AXIOS)
+    if (error.response && error.response.data) {
+      console.log('Resposta veio no error.response:', error.response.data);
+      
+      try {
+        const errorData = typeof error.response.data === 'string' 
+          ? JSON.parse(error.response.data) 
+          : error.response.data;
+        
+        if (errorData.status === "1") {
+          console.log('✅ Atividade finalizada com sucesso (resposta no error)!');
+          
+          // ⭐⭐ ATUALIZAR QUANTIDADES NA NOTA MESMO COM ERRO NO AXIOS ⭐⭐
+          try {
+            if (errorData.responseBody && errorData.responseBody.pk && errorData.responseBody.pk.NUNOTA) {
+              const nunota = errorData.responseBody.pk.NUNOTA.$;
+              console.log('NUNOTA gerada (from error):', nunota);
+              
+              // Atualizar quantidades na nota
+              const resultadoAtualizacao = await atualizarQuantidadesNota(parseInt(nunota));
+              console.log('Resultado da atualização:', resultadoAtualizacao);
+              
+              // Adicionar info da atualização na resposta
+              errorData.atualizacaoNota = resultadoAtualizacao;
+            }
+          } catch (updateError: any) {
+            console.error('Erro ao atualizar nota:', updateError);
+            errorData.atualizacaoNota = { 
+              success: false, 
+              error: updateError.message,
+              message: 'Falha na atualização da nota' 
+            };
+          }
+          
+          return errorData;
+        }
+      } catch (parseError) {
+        console.log('Não foi possível parsear error.response');
+      }
     }
     
-    throw error;
+    // SE É NETWORK ERROR, VERIFICAR SE REALMENTE FALHOU
+    if (error.code === 'ERR_NETWORK' || error.message.includes('Network')) {
+      console.log('Network error detectado, verificando se atividade foi finalizada...');
+      
+      try {
+        const verification = await verificarAtividadeFinalizada(data.IDIATV);
+        if (verification.finalizada) {
+          console.log('✅ Atividade finalizada apesar do network error!');
+          
+          // ⭐⭐ TENTAR OBTER O NUNOTA E ATUALIZAR A NOTA ⭐⭐
+          try {
+            const nunota = await buscarNunotaPorIdiproc(data.IDIPROC);
+            if (nunota) {
+              console.log('NUNOTA encontrada:', nunota);
+              
+              // Atualizar quantidades na nota
+              const resultadoAtualizacao = await atualizarQuantidadesNota(nunota);
+              console.log('Resultado da atualização:', resultadoAtualizacao);
+              
+              return { 
+                status: "1", 
+                success: true, 
+                message: 'Atividade finalizada (network error ignorado)',
+                atualizacaoNota: resultadoAtualizacao,
+                responseBody: {
+                  pk: {
+                    NUNOTA: { "$": nunota.toString() }
+                  }
+                }
+              };
+            }
+          } catch (nunotaError) {
+            console.log('Não foi possível obter NUNOTA para atualização:', nunotaError);
+          }
+          
+          return { 
+            status: "1", 
+            success: true, 
+            message: 'Atividade finalizada (network error ignorado)',
+            atualizacaoNota: {
+              success: false,
+              message: 'Não foi possível obter NUNOTA para atualização'
+            }
+          };
+        }
+      } catch (verifyError) {
+        console.log('Falha na verificação:', verifyError);
+      }
+    }
+    
+    throw new Error(
+      error.message.includes('Network Error') 
+        ? 'Erro de comunicação. Verifique sua conexão.'
+        : error.message
+    );
+  }
+};
+
+// FUNÇÃO AUXILIAR PARA BUSCAR NUNOTA POR IDIPROC
+const buscarNunotaPorIdiproc = async (idiproc: number): Promise<number | null> => {
+  try {
+    const sql = `
+      SELECT NUNOTA 
+      FROM TGFCAB 
+      WHERE IDIPROC = ${idiproc} 
+      ORDER BY NUNOTA DESC 
+      LIMIT 1
+    `;
+    
+    const result = await queryJson('DbExplorerSP.executeQuery', { sql });
+    
+    if (result.rows.length > 0) {
+      return result.rows[0][0];
+    }
+    
+    return null;
+  } catch (error) {
+    console.error('Erro ao buscar NUNOTA:', error);
+    return null;
+  }
+};
+
+// FUNÇÃO PARA VERIFICAR SE A ATIVIDADE FOI REALMENTE FINALIZADA
+const verificarAtividadeFinalizada = async (idiAtv: number): Promise<{ finalizada: boolean }> => {
+  try {
+    const sql = `
+      SELECT DHFIM, STATUS 
+      FROM TPRIATV 
+      WHERE IDIATV = ${idiAtv}
+    `;
+    
+    const result = await queryJson('DbExplorerSP.executeQuery', { sql });
+    
+    if (result.rows.length > 0) {
+      const dhFim = result.rows[0][0]; // Data/hora de fim
+      const status = result.rows[0][1]; // Status
+      
+      return { 
+        finalizada: dhFim !== null && dhFim !== undefined 
+      };
+    }
+    
+    return { finalizada: false };
+  } catch (error) {
+    console.error('Erro ao verificar atividade:', error);
+    return { finalizada: false };
   }
 };
 
