@@ -758,8 +758,11 @@ export const iniciarSeparacao = async (data: {
       throw new Error('Não foi encontrada atividade de EMBALAGEM para esta OP');
     }
 
-    // Formatar data e hora atual no formato DD/MM/YYYY HH:MM
+   // Ajustar para GMT-3 (Horário de Brasília)
     const now = new Date();
+    const offset = -3; // GMT-3
+    now.setHours(now.getHours() + (now.getTimezoneOffset() / 60) + offset);
+
     const day = String(now.getDate()).padStart(2, '0');
     const month = String(now.getMonth() + 1).padStart(2, '0');
     const year = now.getFullYear();
@@ -1031,7 +1034,7 @@ export const finalizarAtividadeEmbalagemComSession = async (data: {
     throw new Error(responseData.statusMessage || 'Erro ao finalizar atividade');
 
   } catch (error: any) {
-    console.error('❌ Error na finalização:', error);
+    // console.error('❌ Error na finalização:', error);
     
     // VERIFICAR SE A RESPOSTA VEIO NO ERROR (COMUM NO AXIOS)
     if (error.response && error.response.data) {

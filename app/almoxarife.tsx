@@ -89,48 +89,48 @@ export default function AlmoxarifadoScreen() {
   }, []);
 
   const verificarUsuarioSeparando = async (
-    codProd: number, 
-    op: number
-  ): Promise<string | null> => {
-    try {
-      const sql = `
-        SELECT USUARIO 
-        FROM AD_ALMOXARIFEWMS 
-        WHERE CODPROD = ${codProd} 
-          AND OP = ${op} 
-          AND STATUS = '1'
-      `;
-      
-      const result = await queryJson('DbExplorerSP.executeQuery', { sql });
-      
-      if (result.rows.length > 0 && result.rows[0][0]) {
-        return result.rows[0][0];
-      }
-      return null;
-    } catch (error) {
-      console.error('Erro ao verificar usuário separando:', error);
-      return null;
+  codProd: number, 
+  op: number
+): Promise<string | null> => {
+  try {
+    const sql = `
+      SELECT USUARIO 
+      FROM AD_ALMOXARIFEWMS 
+      WHERE CODPROD = ${codProd} 
+        AND OP = ${op} 
+        AND STATUS = '1'
+    `;
+    
+    const result = await queryJson('DbExplorerSP.executeQuery', { sql });
+    
+    if (result.rows.length > 0 && result.rows[0][0]) {
+      return result.rows[0][0];
     }
-  };
+    return null;
+  } catch (error) {
+    console.error('Erro ao verificar usuário separando:', error);
+    return null;
+  }
+};
 
   const handleItemPress = async (item: any) => {
-    if (!item.separado && podeSepararItens) {
-      const usuarioSeparando = await verificarUsuarioSeparando(item.COD_MP, Number(idiproc));
-      
-      if (usuarioSeparando && usuarioSeparando !== session?.username) {
-        Alert.alert(
-          'Item em Separação',
-          `Este item está sendo separado por: ${usuarioSeparando}`
-        );
-        return;
-      }
-
-      setCodProdSelecionado(item.COD_MP);
-      setEndereco('');
-      setModalVisible(true);
-      await buscarEnderecosProduto(item.COD_MP);
+  if (!item.separado && podeSepararItens) {
+    const usuarioSeparando = await verificarUsuarioSeparando(item.COD_MP, Number(idiproc));
+    
+    if (usuarioSeparando && usuarioSeparando !== session?.username) {
+      Alert.alert(
+        'Item em Separação',
+        `Este item está sendo separado por: ${usuarioSeparando}`
+      );
+      return;
     }
-  };
+
+    setCodProdSelecionado(item.COD_MP);
+    setEndereco('');
+    setModalVisible(true);
+    await buscarEnderecosProduto(item.COD_MP);
+  }
+};
 
   const buscarOpsAbertas = async () => {
     try {
@@ -475,145 +475,158 @@ const selecionarEndereco = async () => {
 };
 
 const confirmarRetirada = async () => {
-  if (!dadosEndereco.length || codProdSelecionado === null) return;
+    if (!dadosEndereco.length || codProdSelecionado === null) return;
 
-  const itemOP = dados.find(item => item.COD_MP === codProdSelecionado);
-  if (!itemOP) {
-    Alert.alert('Erro', 'Item não encontrado na OP');
-    return;
-  }
-
-  const d = dadosEndereco[0];
-  const codProd = d[0];
-  const descricaoProduto = d[1];
-  
-  const quantidadeMatch = itemOP.QUANTIDADE.match(/(\d+[,.]?\d*)\s*([a-zA-Z]*)/);
-  
-  const quantidadeOPString = quantidadeMatch ? quantidadeMatch[1].replace(',', '.') : '0';
-  const quantidadeOPNumerica = parseFloat(quantidadeOPString) || 0;
-  const unidadeOP = quantidadeMatch ? quantidadeMatch[2] : itemOP.UNIDADE || 'UN';
-  
-  const quantidadeOPOriginal = itemOP.QUANTIDADE;
-  
-  const qtdRetirar = quantidadeRetirada;
-  const usuario = session?.username || "Usuário";
-  const lote = loteRetirada || itemOP.LOTE;
-
-  if (!qtdRetirar) {
-    Alert.alert('Erro', 'Quantidade inválida');
-    return;
-  }
-
-  if (!lote) {
-    Alert.alert('Erro', 'Por favor, informe o lote');
-    return;
-  }
-
-  const parts = qtdRetirar.split('.');
-  if (parts.length === 2 && parts[1].length !== 3) {
-    Alert.alert(
-      'Formato incorreto',
-      `A quantidade deve ter exatamente 3 casas decimais após o ponto.\nExemplo: 1.123`
-    );
-    return;
-  }
-
-  const qtdRetirarNumerica = parseFloat(qtdRetirar);
-
-  if (isNaN(qtdRetirarNumerica) || qtdRetirarNumerica <= 0) {
-    Alert.alert('Erro', 'A quantidade deve ser maior que zero');
-    return;
-  }
-
-  if (qtdRetirarNumerica < quantidadeOPNumerica) {
-    Alert.alert(
-      'Erro', 
-      `Quantidade solicitada (${qtdRetirar}) é menor que a quantidade da OP (${quantidadeOPOriginal})`
-    );
-    return;
-  }
-
-  try {
-    const sqlEstoque = `SELECT SUM(ESTOQUE) as TOTAL_ESTOQUE FROM TGFEST WHERE CODPROD = ${codProd}`;
-    const resultEstoque = await queryJson('DbExplorerSP.executeQuery', { sql: sqlEstoque });
-    
-    let estoqueDisponivel = 0;
-    if (resultEstoque.rows.length > 0 && resultEstoque.rows[0][0] !== null) {
-      estoqueDisponivel = parseFloat(resultEstoque.rows[0][0]);
+    const itemOP = dados.find(item => item.COD_MP === codProdSelecionado);
+    if (!itemOP) {
+      Alert.alert('Erro', 'Item não encontrado na OP');
+      return;
     }
 
-    if (qtdRetirarNumerica > estoqueDisponivel) {
+    const d = dadosEndereco[0];
+    const codProd = d[0];
+    const descricaoProduto = d[1];
+    
+    const quantidadeMatch = itemOP.QUANTIDADE.match(/(\d+[,.]?\d*)\s*([a-zA-Z]*)/);
+    
+    const quantidadeOPString = quantidadeMatch ? quantidadeMatch[1].replace(',', '.') : '0';
+    const quantidadeOPNumerica = parseFloat(quantidadeOPString) || 0;
+    const unidadeOP = quantidadeMatch ? quantidadeMatch[2] : itemOP.UNIDADE || 'UN';
+    
+    const quantidadeOPOriginal = itemOP.QUANTIDADE;
+    
+    const qtdRetirar = quantidadeRetirada;
+    const usuario = session?.username || "Usuário";
+    const lote = loteRetirada || itemOP.LOTE;
+
+     // VERIFICAÇÃO DO DOBRO DA QUANTIDADE DA OP
+    const quantidadeMaximaPermitida = quantidadeOPNumerica * 2;
+
+    if (!qtdRetirar) {
+      Alert.alert('Erro', 'Quantidade inválida');
+      return;
+    }
+
+    if (!lote) {
+      Alert.alert('Erro', 'Por favor, informe o lote');
+      return;
+    }
+
+    const parts = qtdRetirar.split('.');
+    if (parts.length === 2 && parts[1].length !== 3) {
       Alert.alert(
-        'Estoque insuficiente',
-        `Quantidade solicitada: ${qtdRetirar}\nEstoque disponível: ${estoqueDisponivel.toFixed(3)}\n\nNão há estoque suficiente para realizar a retirada.`
+        'Formato incorreto',
+        `A quantidade deve ter exatamente 3 casas decimais após o ponto.\nExemplo: 1.123`
       );
       return;
     }
 
-  } catch (error) {
-    console.error('Erro ao consultar estoque:', error);
-    Alert.alert('Erro', 'Não foi possível verificar o estoque disponível');
-    return;
-  }
+    const qtdRetirarNumerica = parseFloat(qtdRetirar);
 
-  try {
-    if (!codigoRegistro) {
-      throw new Error('Código do registro não encontrado');
+    if (isNaN(qtdRetirarNumerica) || qtdRetirarNumerica <= 0) {
+      Alert.alert('Erro', 'A quantidade deve ser maior que zero');
+      return;
+    }
+   
+    if (qtdRetirarNumerica > quantidadeMaximaPermitida) {
+      Alert.alert(
+        'Quantidade excedida', 
+        `A quantidade máxima permitida é o dobro da OP: ${quantidadeMaximaPermitida.toFixed(3)} ${unidadeOP}\n\nQuantidade solicitada: ${qtdRetirarNumerica.toFixed(3)} ${unidadeOP}`
+      );
+      return;
     }
 
-    await finalizarSeparacaoCompleta({
-        CODIGO: codigoRegistro,
-        CODPROD: codProd,
-        DESCRPROD: descricaoProduto,
-        ESTOQUE: quantidadeOPOriginal,
-        QTDSEPARADA: qtdRetirar,
-        USUARIO: usuario,
-        OP: Number(idiproc),
-        UNIDADE: unidadeOP,
-        LOTE: lote,
-        STATUS: "2"
-      });
+    if (qtdRetirarNumerica < quantidadeOPNumerica) {
+      Alert.alert(
+        'Erro', 
+        `Quantidade solicitada (${qtdRetirar}) é menor que a quantidade da OP (${quantidadeOPOriginal})`
+      );
+      return;
+    }
 
-    setDados(prev => prev.map(item => {
-      if (item.COD_MP === codProd) {
-        return {
-          ...item,
-          separado: {
-            CODPROD: codProd,
-            DESCRPROD: descricaoProduto,
-            ESTOQUE: quantidadeOPOriginal,
-            QTDSEPARADA: qtdRetirar,
-            USUARIO: usuario,
-            OP: Number(idiproc),
-            UNIDADE: unidadeOP,
-            LOTE: lote
-          },
-          emSeparacao: undefined
-        };
+    try {
+      const sqlEstoque = `SELECT SUM(ESTOQUE) as TOTAL_ESTOQUE FROM TGFEST WHERE CODPROD = ${codProd}`;
+      const resultEstoque = await queryJson('DbExplorerSP.executeQuery', { sql: sqlEstoque });
+      
+      let estoqueDisponivel = 0;
+      if (resultEstoque.rows.length > 0 && resultEstoque.rows[0][0] !== null) {
+        estoqueDisponivel = parseFloat(resultEstoque.rows[0][0]);
       }
-      return item;
-    }));
 
-    setModalVisible(false);
-    setDadosEndereco([]);
-    setEndereco('');
-    setQuantidadeRetirada('');
-    setLoteRetirada('');
-    setCodigoRegistro(null);
-    Alert.alert('Sucesso', 'Retirada registrada com sucesso!');
-  } catch (error) {
-    console.error('Erro na retirada:', error);
-    let errorMessage = 'Falha ao registrar retirada';
-    
-    if (error instanceof Error) {
-      errorMessage = error.message;
+      if (qtdRetirarNumerica > estoqueDisponivel) {
+        Alert.alert(
+          'Estoque insuficiente',
+          `Quantidade solicitada: ${qtdRetirar}\nEstoque disponível: ${estoqueDisponivel.toFixed(3)}\n\nNão há estoque suficiente para realizar a retirada.`
+        );
+        return;
+      }
+
+    } catch (error) {
+      console.error('Erro ao consultar estoque:', error);
+      Alert.alert('Erro', 'Não foi possível verificar o estoque disponível');
+      return;
     }
-    
-    Alert.alert('Erro', errorMessage);
-  }
+
+    // Resto do código permanece igual...
+    try {
+      if (!codigoRegistro) {
+        throw new Error('Código do registro não encontrado');
+      }
+
+      await finalizarSeparacaoCompleta({
+          CODIGO: codigoRegistro,
+          CODPROD: codProd,
+          DESCRPROD: descricaoProduto,
+          ESTOQUE: quantidadeOPOriginal,
+          QTDSEPARADA: qtdRetirar,
+          USUARIO: usuario,
+          OP: Number(idiproc),
+          UNIDADE: unidadeOP,
+          LOTE: lote,
+          STATUS: "2"
+        });
+
+        // Dentro do setDados no confirmarRetirada:
+        setDados(prev => prev.map(item => {
+          if (item.COD_MP === codProd) {
+            return {
+              ...item,
+              separado: {
+                CODPROD: codProd,
+                DESCRPROD: descricaoProduto,
+                ESTOQUE: quantidadeOPOriginal,
+                QTDSEPARADA: qtdRetirar,
+                USUARIO: usuario,
+                OP: Number(idiproc),
+                UNIDADE: unidadeOP,
+                LOTE: lote
+              },
+              emSeparacao: undefined // ← REMOVER O ESTADO DE EM SEPARAÇÃO
+            };
+          }
+          return item;
+        }));
+
+      setModalVisible(false);
+      setDadosEndereco([]);
+      setEndereco('');
+      setQuantidadeRetirada('');
+      setLoteRetirada('');
+      setCodigoRegistro(null);
+      Alert.alert('Sucesso', 'Retirada registrada com sucesso!');
+    } catch (error) {
+      console.error('Erro na retirada:', error);
+      let errorMessage = 'Falha ao registrar retirada';
+      
+      if (error instanceof Error) {
+        errorMessage = error.message;
+      }
+      
+      Alert.alert('Erro', errorMessage);
+    }
 };
 
-  const buscarSeparacoes = async (idiproc: number) => {
+const buscarSeparacoes = async (idiproc: number) => {
   try {
     const sql = `
       SELECT 
@@ -642,138 +655,169 @@ const confirmarRetirada = async () => {
   }
 };
 
-  const buscarDados = async () => {
-    if (!session?.jsessionid || !idiproc.trim()) return;
-
-    try {
-      setLoading(true);
-      setError(null);
-      setDados([]);
-      setSeparacaoIniciada(false);
-      setSeparacaoFinalizada(false);
-      setPodeSepararItens(false);
-      
-      const temEmbalagem = await verificarAtividadeEmbalagem(Number(idiproc));
-      setTemAtividadeEmbalagem(temEmbalagem);
-      
-      if (!temEmbalagem) {
-        setError('Esta OP não está na fase de EMBALAGEM ou não foi aceita.');
-        return;
-      }
-
-      const status = await verificarStatusSeparacao(Number(idiproc));
-      setSeparacaoIniciada(status.dhInicio !== null);
-      setSeparacaoFinalizada(status.dhFinal !== null);
-      setPodeSepararItens(status.dhInicio !== null && status.dhFinal === null);
-
-      const sqlQuery = `
-        WITH RankedData AS (
-          SELECT
-            P.IDIPROC,
-            PRO.REFERENCIA,
-            PRO.DESCRPROD AS PRODUTOPA,
-            P.NROLOTE AS LOTE,
-            MP.CODPRODMP AS COD_MP,
-            MP2.DESCRPROD AS PRODUTOMP,
-            CASE
-              WHEN (MP.QTDMISTURA * PA.QTDPRODUZIR) < 0
-                THEN REPLACE(FORMAT((MP.QTDMISTURA * PA.QTDPRODUZIR) * 1000, '#,0.#######', 'de-DE'), ',', '.') 
-                    + ' ' + MP.CODVOL
-              ELSE
-                REPLACE(FORMAT((MP.QTDMISTURA * PA.QTDPRODUZIR), '#,0.#######', 'de-DE'), ',', '.') 
-                    + ' ' + MP.CODVOL
-            END AS QUANTIDADE,
-            MP.CODVOL AS UNIDADE,
-            MP.AD_SEQUENCIAMP AS SEQUENCIA,
-            MP.AD_FASEMP AS FASE,
-            MP.AD_TEMPMP AS TEMPERATURA,
-            MP.AD_OBS AS OBSERVACAO,
-            U.NOMEUSU AS EXECUTANTE,
-            ROW_NUMBER() OVER (
-              PARTITION BY MP.CODPRODMP
-              ORDER BY
-                CASE
-                  WHEN MP.AD_SEQUENCIAMP IS NULL THEN 1 ELSE 0
-                END,
-                MP.AD_SEQUENCIAMP DESC
-            ) AS rn
-          FROM
-            TPRIPROC P
-          JOIN TPRIPA PA ON P.IDIPROC = PA.IDIPROC
-          JOIN (
-            SELECT LMP.*
-            FROM TPRLMP LMP
-            INNER JOIN TPREFX EFX ON EFX.IDEFX = LMP.IDEFX
-            WHERE EFX.IDPROC = (
-              SELECT MAX(P.IDPROC)
-              FROM TPRLPA P
-              INNER JOIN TPRPRC PRC2 ON PRC2.IDPROC = P.IDPROC
-              WHERE P.CODPRODPA = LMP.CODPRODPA
-              AND PRC2.CODUSUALT <> 13
-            )
-            AND EFX.DESCRICAO = 'EMBALAGEM'
-          ) MP ON PA.CODPRODPA = MP.CODPRODPA
-          JOIN TGFPRO MP2 ON MP.CODPRODMP = MP2.CODPROD
-          JOIN TGFPRO PRO ON PA.CODPRODPA = PRO.CODPROD
-          LEFT JOIN TPRIATV A ON P.IDIPROC = A.IDIPROC
-          LEFT JOIN TPREFX RF ON A.IDEFX = RF.IDEFX
-          LEFT JOIN TSIUSU U ON A.CODEXEC = U.CODUSU
-          WHERE
-            P.IDIPROC = ${idiproc}
-            AND MP.CODPRODMP <> 355
-            AND P.STATUSPROC <> 'C'
-            AND RF.DESCRICAO IN ('EMBALAGEM')
-        )
-        SELECT
-          IDIPROC, REFERENCIA, PRODUTOPA, LOTE, COD_MP, PRODUTOMP, QUANTIDADE, 
-          UNIDADE, SEQUENCIA, FASE, TEMPERATURA, OBSERVACAO, EXECUTANTE
-        FROM RankedData
-        WHERE rn = 1
-        ORDER BY SEQUENCIA
-      `;
-
-      const result = await queryJson('DbExplorerSP.executeQuery', { sql: sqlQuery });
-      const separacoes = await buscarSeparacoes(Number(idiproc));
-
-      if (result.rows.length > 0) {
-        const dadosFormatados = result.rows.map((row: any) => {
-          const codProdMP = row[4];
-          const separacao = separacoes.find((s: any) => s.CODPROD === codProdMP);
-          
-          return {
-            IDIPROC: row[0],
-            REFERENCIA: row[1],
-            PRODUTOPA: row[2],
-            LOTE: row[3],
-            COD_MP: codProdMP,
-            PRODUTOMP: row[5],
-            QUANTIDADE: row[6],
-            UNIDADE: row[8],
-            SEQUENCIA: row[9],
-            FASE: row[10],
-            TEMPERATURA: row[11],
-            OBSERVACAO: row[12],
-            EXECUTANTE: row[13],
-            separado: separacao ? {
-              CODPROD: separacao.CODPROD,
-              DESCRPROD: separacao.DESCRPROD,
-              QTDSEPARADA: separacao.QTDSEPARADA,
-              USUARIO: separacao.USUARIO,
-              OP: separacao.OP,
-              UNIDADE: separacao.UNIDADE
-            } : undefined
-          };
-        });
-        setDados(dadosFormatados);
-      } else {
-        setError('Nenhum registro dessa OP em embalagem ou OP inexistente');
-      }
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Erro ao buscar dados');
-    } finally {
-      setLoading(false);
+const buscarSeparacoesEmAndamento = async (idiproc: number) => {
+  try {
+    const sql = `
+      SELECT 
+        CODPROD, USUARIO
+      FROM AD_ALMOXARIFEWMS
+      WHERE OP = ${idiproc} AND STATUS = '1'
+    `;
+    
+    const result = await queryJson('DbExplorerSP.executeQuery', { sql });
+    
+    if (result.rows.length > 0) {
+      return result.rows.map((row: any) => ({
+        CODPROD: row[0],
+        USUARIO: row[1]
+      }));
     }
-  };
+    return [];
+  } catch (error) {
+    console.error('Erro ao buscar separações em andamento:', error);
+    return [];
+  }
+};
+
+  const buscarDados = async () => {
+  if (!session?.jsessionid || !idiproc.trim()) return;
+
+  try {
+    setLoading(true);
+    setError(null);
+    setDados([]);
+    setSeparacaoIniciada(false);
+    setSeparacaoFinalizada(false);
+    setPodeSepararItens(false);
+    
+    const temEmbalagem = await verificarAtividadeEmbalagem(Number(idiproc));
+    setTemAtividadeEmbalagem(temEmbalagem);
+    
+    if (!temEmbalagem) {
+      setError('Esta OP não está na fase de EMBALAGEM ou não foi aceita.');
+      return;
+    }
+
+    const status = await verificarStatusSeparacao(Number(idiproc));
+    setSeparacaoIniciada(status.dhInicio !== null);
+    setSeparacaoFinalizada(status.dhFinal !== null);
+    setPodeSepararItens(status.dhInicio !== null && status.dhFinal === null);
+
+    // Buscar itens em separação (status = 1)
+    const separacoesEmAndamento = await buscarSeparacoesEmAndamento(Number(idiproc));
+
+    const sqlQuery = `
+      WITH RankedData AS (
+        SELECT
+          P.IDIPROC,
+          PRO.REFERENCIA,
+          PRO.DESCRPROD AS PRODUTOPA,
+          P.NROLOTE AS LOTE,
+          MP.CODPRODMP AS COD_MP,
+          MP2.DESCRPROD AS PRODUTOMP,
+          CASE
+            WHEN (MP.QTDMISTURA * PA.QTDPRODUZIR) < 0
+              THEN REPLACE(FORMAT((MP.QTDMISTURA * PA.QTDPRODUZIR) * 1000, '#,0.#######', 'de-DE'), ',', '.') 
+                  + ' ' + MP.CODVOL
+            ELSE
+              REPLACE(FORMAT((MP.QTDMISTURA * PA.QTDPRODUZIR), '#,0.#######', 'de-DE'), ',', '.') 
+                  + ' ' + MP.CODVOL
+          END AS QUANTIDADE,
+          MP.CODVOL AS UNIDADE,
+          MP.AD_SEQUENCIAMP AS SEQUENCIA,
+          MP.AD_FASEMP AS FASE,
+          MP.AD_TEMPMP AS TEMPERATURA,
+          MP.AD_OBS AS OBSERVACAO,
+          U.NOMEUSU AS EXECUTANTE,
+          ROW_NUMBER() OVER (
+            PARTITION BY MP.CODPRODMP
+            ORDER BY
+              CASE
+                WHEN MP.AD_SEQUENCIAMP IS NULL THEN 1 ELSE 0
+              END,
+              MP.AD_SEQUENCIAMP DESC
+          ) AS rn
+        FROM
+          TPRIPROC P
+        JOIN TPRIPA PA ON P.IDIPROC = PA.IDIPROC
+        JOIN (
+          SELECT LMP.*
+          FROM TPRLMP LMP
+          INNER JOIN TPREFX EFX ON EFX.IDEFX = LMP.IDEFX
+          WHERE EFX.IDPROC = (
+            SELECT MAX(P.IDPROC)
+            FROM TPRLPA P
+            INNER JOIN TPRPRC PRC2 ON PRC2.IDPROC = P.IDPROC
+            WHERE P.CODPRODPA = LMP.CODPRODPA
+            AND PRC2.CODUSUALT <> 13
+          )
+          AND EFX.DESCRICAO = 'EMBALAGEM'
+        ) MP ON PA.CODPRODPA = MP.CODPRODPA
+        JOIN TGFPRO MP2 ON MP.CODPRODMP = MP2.CODPROD
+        JOIN TGFPRO PRO ON PA.CODPRODPA = PRO.CODPROD
+        LEFT JOIN TPRIATV A ON P.IDIPROC = A.IDIPROC
+        LEFT JOIN TPREFX RF ON A.IDEFX = RF.IDEFX
+        LEFT JOIN TSIUSU U ON A.CODEXEC = U.CODUSU
+        WHERE
+          P.IDIPROC = ${idiproc}
+          AND MP.CODPRODMP <> 355
+          AND P.STATUSPROC <> 'C'
+          AND RF.DESCRICAO IN ('EMBALAGEM')
+      )
+      SELECT
+        IDIPROC, REFERENCIA, PRODUTOPA, LOTE, COD_MP, PRODUTOMP, QUANTIDADE, 
+        UNIDADE, SEQUENCIA, FASE, TEMPERATURA, OBSERVACAO, EXECUTANTE
+      FROM RankedData
+      WHERE rn = 1
+      ORDER BY SEQUENCIA
+    `;
+
+    const result = await queryJson('DbExplorerSP.executeQuery', { sql: sqlQuery });
+    const separacoes = await buscarSeparacoes(Number(idiproc));
+
+    if (result.rows.length > 0) {
+      const dadosFormatados = result.rows.map((row: any) => {
+        const codProdMP = row[4];
+        const separacao = separacoes.find((s: any) => s.CODPROD === codProdMP);
+        const emSeparacao = separacoesEmAndamento.find((s: any) => s.CODPROD === codProdMP);
+        
+        return {
+          IDIPROC: row[0],
+          REFERENCIA: row[1],
+          PRODUTOPA: row[2],
+          LOTE: row[3],
+          COD_MP: codProdMP,
+          PRODUTOMP: row[5],
+          QUANTIDADE: row[6],
+          UNIDADE: row[8],
+          SEQUENCIA: row[9],
+          FASE: row[10],
+          TEMPERATURA: row[11],
+          OBSERVACAO: row[12],
+          EXECUTANTE: row[13],
+          separado: separacao ? {
+            CODPROD: separacao.CODPROD,
+            DESCRPROD: separacao.DESCRPROD,
+            QTDSEPARADA: separacao.QTDSEPARADA,
+            USUARIO: separacao.USUARIO,
+            OP: separacao.OP,
+            UNIDADE: separacao.UNIDADE
+          } : undefined,
+          emSeparacao: emSeparacao ? {
+            USUARIO: emSeparacao.USUARIO
+          } : undefined
+        };
+      });
+      setDados(dadosFormatados);
+    } else {
+      setError('Nenhum registro dessa OP em embalagem ou OP inexistente');
+    }
+  } catch (err) {
+    setError(err instanceof Error ? err.message : 'Erro ao buscar dados');
+  } finally {
+    setLoading(false);
+  }
+};
 
   const todosItensSeparados = () => {
     if (dados.length === 0) return false;
@@ -856,61 +900,57 @@ const confirmarRetirada = async () => {
         </View>
       )}
 
-      <FlatList
-        data={dados}
-        keyExtractor={(item, index) => index.toString()}
-        scrollEnabled={false}
-        renderItem={({ item }) => (
-          <TouchableOpacity
-            style={[
-              styles.materialCard,
-              item.separado && styles.separadoCard,
-              item.emSeparacao && styles.emSeparacaoCard,
-              (!podeSepararItens || item.emSeparacao) && styles.itemDisabled
-            ]}
-            onPress={() => {
-              if (!item.separado && podeSepararItens && !item.emSeparacao) {
-                setCodProdSelecionado(item.COD_MP);
-                setEndereco('');
-                setModalVisible(true);
-                handleItemPress(item);
-              }
-            }}
-            // disabled={!podeSepararItens || item.emSeparacao}
-          >
-            <View style={styles.materialHeader}>
-              <Text style={styles.materialValue}>{item.COD_MP} - {item.PRODUTOMP}</Text>
-            </View>
-            
-            <View style={styles.materialHeader}>
-              <Text style={styles.loteText}>Lote OP: {item.LOTE}</Text>
-              <Text style={styles.materialQuantity}>Qtd OP: {item.QUANTIDADE}</Text>
-            </View>
+    <FlatList
+  data={dados}
+  keyExtractor={(item, index) => index.toString()}
+  scrollEnabled={false}
+  renderItem={({ item }) => (
+    <TouchableOpacity
+      style={[
+        styles.materialCard,
+        // Aplica laranja apenas se estiver em separação E NÃO separado
+        (item.emSeparacao && !item.separado) && styles.emSeparacaoCard,
+        // Aplica verde se estiver separado (sobrescreve o laranja se necessário)
+        item.separado && styles.separadoCard,
+        // Adiciona estilo de desabilitado se não pode separar
+        !podeSepararItens && styles.itemDisabled
+      ]}
+      onPress={() => handleItemPress(item)}
+      // disabled={!podeSepararItens || item.emSeparacao || item.separado}
+    >
+      <View style={styles.materialHeader}>
+        <Text style={styles.materialValue}>{item.COD_MP} - {item.PRODUTOMP}</Text>
+      </View>
+      
+      <View style={styles.materialHeader}>
+        <Text style={styles.loteText}>Lote OP: {item.LOTE}</Text>
+        <Text style={styles.materialQuantity}>Qtd OP: {item.QUANTIDADE}</Text>
+      </View>
 
-            {item.emSeparacao && !item.separado && (
-              <View style={styles.emSeparacaoContainer}>
-                <Ionicons name="lock-closed" size={16} color="#ff9800" />
-                <Text style={styles.emSeparacaoText}>
-                  Em separação por: {item.emSeparacao.USUARIO}
-                </Text>
-              </View>
-            )}
-            
-            {item.separado && (
-              <View style={styles.separadoContainer}>
-                <View style={styles.separadoRow}>
-                  <Ionicons name="checkmark-circle" size={16} color="#2e7d32" />
-                  <Text style={styles.separadoText}>Separação concluída ({item.separado.UNIDADE})</Text>
-                </View>
-                <View style={styles.separadoDetails}>
-                  <Text style={styles.separadoDetail}>Qtd: {item.separado.QTDSEPARADA} </Text>
-                  <Text style={styles.separadoDetail}>Por: {item.separado.USUARIO}</Text>
-                </View>
-              </View>
-            )}
-          </TouchableOpacity>
-        )}
-      />
+      {item.emSeparacao && !item.separado && (
+        <View style={styles.emSeparacaoContainer}>
+          <Ionicons name="lock-closed" size={16} color="#ff9800" />
+          <Text style={styles.emSeparacaoText}>
+            Em separação por: {item.emSeparacao.USUARIO}
+          </Text>
+        </View>
+      )}
+      
+      {item.separado && (
+        <View style={styles.separadoContainer}>
+          <View style={styles.separadoRow}>
+            <Ionicons name="checkmark-circle" size={16} color="#2e7d32" />
+            <Text style={styles.separadoText}>Separação concluída ({item.separado.UNIDADE})</Text>
+          </View>
+          <View style={styles.separadoDetails}>
+            <Text style={styles.separadoDetail}>Qtd: {item.separado.QTDSEPARADA} </Text>
+            <Text style={styles.separadoDetail}>Por: {item.separado.USUARIO}</Text>
+          </View>
+        </View>
+      )}
+    </TouchableOpacity>
+  )}
+/>
 
     </ScrollView>
 
@@ -994,7 +1034,9 @@ const confirmarRetirada = async () => {
                         <Text style={{ fontWeight: 'bold' }}>Qtd OP:</Text> {itemOPModal?.QUANTIDADE || 'N/A'}
                       </Text>
                       <Text style={{ marginBottom: 16, color: '#1976d2', fontWeight: 'bold' }}>
-                        <Text style={{ fontWeight: 'bold' }}>Estoque Disponível:</Text> {estoqueTotal}
+                        <Text style={{ fontWeight: 'bold' }}>Máximo Permitido:</Text> {(
+                          parseFloat((itemOPModal?.QUANTIDADE || '0').replace(',', '.')) * 2
+                        ).toFixed(3)}
                       </Text>
 
                       <TextInput
@@ -1528,4 +1570,5 @@ const styles = StyleSheet.create({
     marginLeft: 4,
     fontWeight: '500',
   },
+
 });
