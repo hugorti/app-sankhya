@@ -289,18 +289,6 @@ export default function AlmoxarifadoScreen() {
           try {
             setLoading(true);
             setProgressoFinalizacao(true);
-            
-            // 1. Limpar todos os bloqueios pendentes para esta OP
-            try {
-              const sqlLimparBloqueios = `
-                UPDATE AD_ALMOXARIFEWMS 
-                SET STATUS = '2' 
-                WHERE OP = ${Number(idiproc)} AND STATUS = '1'
-              `;
-              await queryJson('DbExplorerSP.executeQuery', { sql: sqlLimparBloqueios });
-            } catch (error) {
-              console.error('Erro ao limpar bloqueios:', error);
-            }
 
             // 2. BUSCAR TODOS OS DADOS NECESSÁRIOS DE UMA VEZ
             console.log('Buscando dados da atividade de embalagem...');
@@ -344,7 +332,7 @@ export default function AlmoxarifadoScreen() {
               if (resultado.atualizacaoNota.success) {
                 console.log('✅ Quantidades atualizadas com sucesso!');
                 if (resultado.atualizacaoNota.itensAtualizados > 0) {
-                  Alert.alert('Sucesso', `Separação finalizada com sucesso! ${resultado.atualizacaoNota.itensAtualizados} itens atualizados.`);
+                  Alert.alert('Sucesso', `Separação finalizada com sucesso! e movimento criado.`);
                 } else {
                   Alert.alert('Sucesso', 'Separação finalizada! Nenhuma quantidade separada para atualizar.');
                 }
@@ -363,7 +351,7 @@ export default function AlmoxarifadoScreen() {
             setInicioTimestamp(null);
 
           } catch (error: any) {
-            console.error('Erro ao finalizar separação:', error);
+            // console.error('Erro ao finalizar separação:', error);
             Alert.alert('Erro', error instanceof Error ? error.message : 'Falha ao finalizar separação');
           } finally {
             setLoading(false);
@@ -688,10 +676,12 @@ const confirmarRetirada = async () => {
             MP.CODPRODMP AS COD_MP,
             MP2.DESCRPROD AS PRODUTOMP,
             CASE
-              WHEN (MP.QTDMISTURA * PA.QTDPRODUZIR) < 0.999
-                THEN REPLACE(FORMAT((MP.QTDMISTURA * PA.QTDPRODUZIR) * 1000, '0.#######'), ',', '.') + ' ' + MP.CODVOL
+              WHEN (MP.QTDMISTURA * PA.QTDPRODUZIR) < 0
+                THEN REPLACE(FORMAT((MP.QTDMISTURA * PA.QTDPRODUZIR) * 1000, '#,0.#######', 'de-DE'), ',', '.') 
+                    + ' ' + MP.CODVOL
               ELSE
-                REPLACE(FORMAT((MP.QTDMISTURA * PA.QTDPRODUZIR), '0.#######'), ',', '.') + ' ' + MP.CODVOL
+                REPLACE(FORMAT((MP.QTDMISTURA * PA.QTDPRODUZIR), '#,0.#######', 'de-DE'), ',', '.') 
+                    + ' ' + MP.CODVOL
             END AS QUANTIDADE,
             MP.CODVOL AS UNIDADE,
             MP.AD_SEQUENCIAMP AS SEQUENCIA,
