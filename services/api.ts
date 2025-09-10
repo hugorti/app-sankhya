@@ -1318,6 +1318,105 @@ export const finalizarSeparacaoCompleta = async (data: {
   }
 };
 
+// CORREÇÃO: Função para salvar/atualizar lote com key
+export const salvarLoteAPI = async (
+  nunota: number,
+  lote: string
+): Promise<any> => {
+  try {
+    console.log('🔄 Iniciando salvamento do lote:', { nunota, lote });
+    
+    // Primeiro, verificar se já existe um registro para esta nota
+    const sqlVerificacao = `
+      SELECT NUNOTA FROM AD_LOTESALMOX WHERE NUNOTA = ${nunota}
+    `;
+    
+    let existeRegistro = false;
+    try {
+      const resultVerificacao = await queryJson('DbExplorerSP.executeQuery', { sql: sqlVerificacao });
+      existeRegistro = resultVerificacao.rows.length > 0;
+      console.log('📋 Verificação de registro existente:', existeRegistro);
+    } catch (error) {
+      console.log('ℹ️ Não foi possível verificar registro existente, assumindo que não existe');
+    }
+
+    // Montar o requestBody com ou sem key dependendo se já existe
+    const requestBody = {
+      serviceName: "CRUDServiceProvider.saveRecord",
+      requestBody: {
+        dataSet: {
+          rootEntity: "AD_LOTESALMOX",
+          includePresentationFields: "N",
+          dataRow: {
+            localFields: {
+              NUNOTA: { "$": nunota },
+              LOTE: { "$": lote.trim() }
+            },
+            // Incluir key apenas se já existir registro (para UPDATE)
+            ...(existeRegistro && {
+              key: {
+                NUNOTA: { "$": nunota }
+              }
+            })
+          },
+          entity: {
+            fieldset: {
+              list: "NUNOTA, LOTE"
+            }
+          }
+        }
+      }
+    };
+
+    console.log('📤 Enviando requisição para salvar lote:', JSON.stringify(requestBody, null, 2));
+
+    const response = await api.post(
+      'mge/service.sbr?serviceName=CRUDServiceProvider.saveRecord&outputType=json',
+      requestBody,
+      { 
+        headers: { 
+          'Content-Type': 'application/json',
+          'Accept': 'application/json'
+        } 
+      }
+    );
+
+    console.log('📥 Resposta recebida:', JSON.stringify(response.data, null, 2));
+
+    if (response.data.status === "1") {
+      console.log('✅ Lote salvo/atualizado com sucesso');
+      return {
+        success: true,
+        nunota: nunota,
+        lote: lote,
+        operacao: existeRegistro ? 'atualizado' : 'criado',
+        message: existeRegistro ? 'Lote atualizado com sucesso!' : 'Lote vinculado com sucesso!'
+      };
+    } else {
+      const errorMsg = response.data.statusMessage || 'Erro ao salvar lote';
+      console.error('❌ Erro na resposta:', errorMsg);
+      throw new Error(errorMsg);
+    }
+
+  } catch (error: any) {
+    console.error('❌ Erro completo ao salvar lote:', error);
+    
+    let errorMessage = 'Falha ao vincular o lote';
+    
+    if (error.response) {
+      errorMessage = `Erro ${error.response.status}: ${error.response.data?.statusMessage || 'Erro desconhecido'}`;
+      console.error('❌ Detalhes do erro:', error.response.data);
+    } else if (error.request) {
+      errorMessage = 'Erro de conexão com o servidor';
+      console.error('❌ Erro de rede:', error.request);
+    } else if (error.message) {
+      errorMessage = error.message;
+    }
+    
+    throw new Error(errorMessage);
+  }
+};
+
 export const query = async (serviceName: string, requestBody: string): Promise<any> => {
   const xmlRequest = `<?xml version="1.0" encoding="ISO-8859-1"?>
 <serviceRequest serviceName="${escapeXml(serviceName)}">

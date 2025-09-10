@@ -1,4 +1,4 @@
-package com.hugorodrigues.wmslabotrat
+package com.hugorodrigues.wms
 
 import android.app.Application
 import android.content.res.Configuration

@@ -201,7 +201,7 @@ const handleLoginError = (error: Error) => {
       </TouchableOpacity>
 
       <View style={styles.footer}>
-        <Text style={styles.footerText}>Versão 1.0.1</Text>
+        <Text style={styles.footerText}>Versão 1.0.2</Text>
       </View>
     </SafeAreaView>
   );

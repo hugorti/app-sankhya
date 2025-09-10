@@ -1,11 +1,11 @@
 {
   "expo": {
     "name": "WMS Labotrat",
-    "slug": "wmslabotrat",
-    "version": "1.0.1",
+    "slug": "wms",
+    "version": "1.0.2",
     "orientation": "portrait",
     "icon": "./assets/images/logo.png",
-    "scheme": "wmslabotrat",
+    "scheme": "wms",
     "userInterfaceStyle": "automatic",
     "splash": {
       "image": "./assets/images/logo.png",
@@ -17,18 +17,18 @@
         "foregroundImage": "./assets/images/logo.png",
         "monochromeImage": "./assets/images/logo.png"
       },
-      "package": "com.hugorodrigues.wmslabotrat",
+      "package": "com.hugorodrigues.wms",
       "permissions": [
         "android.permission.INTERNET",
         "android.permission.ACCESS_NETWORK_STATE"
       ],
       "usesCleartextTraffic": true,
       "networkSecurityConfig": "./network_security_config.xml",
-      "versionCode": 1
+      "versionCode": 3
     },
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "com.hugorodrigues.wmslabotrat",
+      "bundleIdentifier": "com.hugorodrigues.wms",
       "config": {
         "usesNonExemptEncryption": false
       }

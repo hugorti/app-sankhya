@@ -758,6 +758,7 @@ const buscarDados = async () => {
     // Buscar itens em separação (status = 1)
     const separacoesEmAndamento = await buscarSeparacoesEmAndamento(Number(idiproc));
 
+    // Substitua a consulta SQL atual por esta versão modificada
     const sqlQuery = `
       WITH RankedData AS (
         SELECT
@@ -815,6 +816,8 @@ const buscarDados = async () => {
           AND MP.CODPRODMP <> 355
           AND P.STATUSPROC <> 'C'
           AND RF.DESCRICAO IN ('EMBALAGEM')
+          -- ADICIONE ESTA CONDIÇÃO PARA FILTRAR ITENS QUE NÃO COMEÇAM COM 'FITA'
+          AND MP2.DESCRPROD NOT LIKE 'FITA%'
       )
       SELECT
         IDIPROC, REFERENCIA, PRODUTOPA, LOTE, COD_MP, PRODUTOMP, QUANTIDADE, 

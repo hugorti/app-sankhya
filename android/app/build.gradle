@@ -87,13 +87,13 @@ android {
     buildToolsVersion rootProject.ext.buildToolsVersion
     compileSdk rootProject.ext.compileSdkVersion
 
-    namespace 'com.hugorodrigues.wmslabotrat'
+    namespace 'com.hugorodrigues.wms'
     defaultConfig {
-        applicationId 'com.hugorodrigues.wmslabotrat'
+        applicationId 'com.hugorodrigues.wms'
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 2   // sempre aumentar ao gerar nova versão
-        versionName "1.0.1"
+        versionCode 3  // sempre aumentar ao gerar nova versão
+        versionName "1.0.2"
     }
 
     signingConfigs {

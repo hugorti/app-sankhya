@@ -1,4 +1,4 @@
-package com.hugorodrigues.wmslabotrat
+package com.hugorodrigues.wms
 import expo.modules.splashscreen.SplashScreenManager
 
 import android.os.Build
