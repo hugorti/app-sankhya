@@ -84,6 +84,9 @@ export default function AlmoxarifadoScreen() {
   const [progressoFinalizacao, setProgressoFinalizacao] = useState(false);
   const [codigoRegistro, setCodigoRegistro] = useState<number | null>(null);
 
+  const [modalSucessoVisible, setModalSucessoVisible] = useState(false);
+const [mensagemSucesso, setMensagemSucesso] = useState('');
+
   useEffect(() => {
     buscarOpsAbertas();
   }, []);
@@ -332,16 +335,18 @@ export default function AlmoxarifadoScreen() {
               if (resultado.atualizacaoNota.success) {
                 console.log('✅ Quantidades atualizadas com sucesso!');
                 if (resultado.atualizacaoNota.itensAtualizados > 0) {
-                  Alert.alert('Sucesso', `Separação finalizada com sucesso! e movimento criado.`);
+                  setMensagemSucesso('Separação finalizada com sucesso! e movimento criado.');
                 } else {
-                  Alert.alert('Sucesso', 'Separação finalizada! Nenhuma quantidade separada para atualizar.');
+                  setMensagemSucesso('Separação finalizada! Nenhuma quantidade separada para atualizar.');
                 }
+                setModalSucessoVisible(true);
               } else {
                 console.warn('⚠️ Atividade finalizada, mas falha na atualização:', resultado.atualizacaoNota.message);
                 Alert.alert('Atenção', `Atividade finalizada, mas: ${resultado.atualizacaoNota.message}`);
               }
             } else {
-              Alert.alert('Sucesso', 'Separação finalizada com sucesso!');
+              setMensagemSucesso('Separação finalizada com sucesso!');
+              setModalSucessoVisible(true);
             }
             
             setDados([]);
@@ -366,6 +371,8 @@ export default function AlmoxarifadoScreen() {
  const buscarEnderecosProduto = async (codProd: number) => {
   try {
     setLoading(true);
+    
+    // SQL para buscar todos os endereços do produto
     const sql = `
       SELECT 
         EXP.CODPROD,
@@ -387,22 +394,73 @@ export default function AlmoxarifadoScreen() {
     
     const res = await queryJson('DbExplorerSP.executeQuery', { sql });
     
-    const sqlEstoque = `SELECT SUM(ESTOQUE) as TOTAL_ESTOQUE FROM TGFEST WHERE CODPROD = ${codProd}`;
-    const resultEstoque = await queryJson('DbExplorerSP.executeQuery', { sql: sqlEstoque });
+    // 3 SCRIPTS SEPARADOS - UM PARA CADA LOCAL
+    const sqlAlmox = `
+      SELECT SUM(ESTOQUE) as TOTAL_ESTOQUE 
+      FROM TGFEST 
+      WHERE CODPROD = ${codProd} 
+      AND CODLOCAL = 50000000
+    `;
     
-    let estoqueTotalStr = '0';
-    if (resultEstoque.rows.length > 0 && resultEstoque.rows[0][0] !== null) {
-      estoqueTotalStr = resultEstoque.rows[0][0].toString();
-    }
-    setEstoqueTotal(estoqueTotalStr);
+    const sqlGP1 = `
+      SELECT SUM(ESTOQUE) as TOTAL_ESTOQUE 
+      FROM TGFEST 
+      WHERE CODPROD = ${codProd} 
+      AND CODLOCAL = 120000000
+    `;
+    
+    const sqlGP2 = `
+      SELECT SUM(ESTOQUE) as TOTAL_ESTOQUE 
+      FROM TGFEST 
+      WHERE CODPROD = ${codProd} 
+      AND CODLOCAL = 130000000
+    `;
+    
+    const sqlTotal = `
+      SELECT SUM(ESTOQUE) as TOTAL_ESTOQUE 
+      FROM TGFEST 
+      WHERE CODPROD = ${codProd} 
+      AND CODLOCAL IN (50000000, 120000000, 130000000)
+    `;
+    
+    // Executar todas as consultas em paralelo
+    const [resultAlmox, resultGP1, resultGP2, resultTotal] = await Promise.all([
+      queryJson('DbExplorerSP.executeQuery', { sql: sqlAlmox }),
+      queryJson('DbExplorerSP.executeQuery', { sql: sqlGP1 }),
+      queryJson('DbExplorerSP.executeQuery', { sql: sqlGP2 }),
+      queryJson('DbExplorerSP.executeQuery', { sql: sqlTotal })
+    ]);
+    
+    // Processar resultados
+    const getEstoque = (result: any) => {
+      return result.rows.length > 0 && result.rows[0][0] !== null 
+        ? parseFloat(result.rows[0][0]) 
+        : 0;
+    };
+    
+    const estoqueAlmox = getEstoque(resultAlmox);
+    const estoqueGP1 = getEstoque(resultGP1);
+    const estoqueGP2 = getEstoque(resultGP2);
+    const estoqueTotal = getEstoque(resultTotal);
+    
+    setEstoqueTotal(estoqueTotal.toString());
     
     if (res.rows.length > 0) {
-      setDadosEndereco(res.rows);
+      // Adicionar informações dos estoques individuais aos dados
+      const dadosComEstoques = res.rows.map((row: any) => ({
+        ...row,
+        ESTOQUE_ALMOX: estoqueAlmox,
+        ESTOQUE_GP1: estoqueGP1,
+        ESTOQUE_GP2: estoqueGP2,
+        ESTOQUE_TOTAL: estoqueTotal
+      }));
+      
+      setDadosEndereco(dadosComEstoques);
       setEndereco('');
       setModalMode('lista');
       setModalVisible(true);
       
-      setEnderecoSelecionado(res.rows[0]);
+      setEnderecoSelecionado(dadosComEstoques[0]);
       setDetalhesEnderecoVisivel(true);
     } else {
       Alert.alert('Aviso', 'Nenhum endereço encontrado para este produto');
@@ -468,7 +526,7 @@ const selecionarEndereco = async () => {
       }));
       
     } catch (error) {
-      console.error('Erro ao bloquear item:', error);
+      // console.error('Erro ao bloquear item:', error);
       Alert.alert('Erro', 'Falha ao iniciar separação: ' + (error instanceof Error ? error.message : 'Erro desconhecido'));
     }
   }
@@ -499,9 +557,6 @@ const confirmarRetirada = async () => {
     const usuario = session?.username || "Usuário";
     const lote = loteRetirada || itemOP.LOTE;
 
-     // VERIFICAÇÃO DO DOBRO DA QUANTIDADE DA OP
-    const quantidadeMaximaPermitida = quantidadeOPNumerica * 2;
-
     if (!qtdRetirar) {
       Alert.alert('Erro', 'Quantidade inválida');
       return;
@@ -513,10 +568,11 @@ const confirmarRetirada = async () => {
     }
 
     const parts = qtdRetirar.split('.');
-    if (parts.length === 2 && parts[1].length !== 3) {
+    // ALTERADO: Agora permite até 4 casas decimais
+    if (parts.length === 2 && parts[1].length > 4) {
       Alert.alert(
         'Formato incorreto',
-        `A quantidade deve ter exatamente 3 casas decimais após o ponto.\nExemplo: 1.123`
+        `A quantidade deve ter no máximo 4 casas decimais após o ponto.\nExemplo: 1.1234`
       );
       return;
     }
@@ -525,14 +581,6 @@ const confirmarRetirada = async () => {
 
     if (isNaN(qtdRetirarNumerica) || qtdRetirarNumerica <= 0) {
       Alert.alert('Erro', 'A quantidade deve ser maior que zero');
-      return;
-    }
-   
-    if (qtdRetirarNumerica > quantidadeMaximaPermitida) {
-      Alert.alert(
-        'Quantidade excedida', 
-        `A quantidade máxima permitida é o dobro da OP: ${quantidadeMaximaPermitida.toFixed(3)} ${unidadeOP}\n\nQuantidade solicitada: ${qtdRetirarNumerica.toFixed(3)} ${unidadeOP}`
-      );
       return;
     }
 
@@ -545,9 +593,15 @@ const confirmarRetirada = async () => {
     }
 
     try {
-      const sqlEstoque = `SELECT SUM(ESTOQUE) as TOTAL_ESTOQUE FROM TGFEST WHERE CODPROD = ${codProd}`;
-      const resultEstoque = await queryJson('DbExplorerSP.executeQuery', { sql: sqlEstoque });
-      
+      const sqlTotal = `
+        SELECT SUM(ESTOQUE) as TOTAL_ESTOQUE 
+        FROM TGFEST 
+        WHERE CODPROD = ${codProd} 
+        AND CODLOCAL IN (50000000, 120000000, 130000000)
+      `;
+
+      const resultEstoque = await queryJson('DbExplorerSP.executeQuery', { sql: sqlTotal });
+
       let estoqueDisponivel = 0;
       if (resultEstoque.rows.length > 0 && resultEstoque.rows[0][0] !== null) {
         estoqueDisponivel = parseFloat(resultEstoque.rows[0][0]);
@@ -556,7 +610,7 @@ const confirmarRetirada = async () => {
       if (qtdRetirarNumerica > estoqueDisponivel) {
         Alert.alert(
           'Estoque insuficiente',
-          `Quantidade solicitada: ${qtdRetirar}\nEstoque disponível: ${estoqueDisponivel.toFixed(3)}\n\nNão há estoque suficiente para realizar a retirada.`
+          `Quantidade solicitada: ${qtdRetirar}\nEstoque disponível: ${estoqueDisponivel.toFixed(4)}\n\nNão há estoque suficiente para realizar a retirada.`
         );
         return;
       }
@@ -567,45 +621,43 @@ const confirmarRetirada = async () => {
       return;
     }
 
-    // Resto do código permanece igual...
     try {
       if (!codigoRegistro) {
         throw new Error('Código do registro não encontrado');
       }
 
       await finalizarSeparacaoCompleta({
-          CODIGO: codigoRegistro,
-          CODPROD: codProd,
-          DESCRPROD: descricaoProduto,
-          ESTOQUE: quantidadeOPOriginal,
-          QTDSEPARADA: qtdRetirar,
-          USUARIO: usuario,
-          OP: Number(idiproc),
-          UNIDADE: unidadeOP,
-          LOTE: lote,
-          STATUS: "2"
-        });
+        CODIGO: codigoRegistro,
+        CODPROD: codProd,
+        DESCRPROD: descricaoProduto,
+        ESTOQUE: quantidadeOPOriginal,
+        QTDSEPARADA: qtdRetirar,
+        USUARIO: usuario,
+        OP: Number(idiproc),
+        UNIDADE: unidadeOP,
+        LOTE: lote,
+        STATUS: "2"
+      });
 
-        // Dentro do setDados no confirmarRetirada:
-        setDados(prev => prev.map(item => {
-          if (item.COD_MP === codProd) {
-            return {
-              ...item,
-              separado: {
-                CODPROD: codProd,
-                DESCRPROD: descricaoProduto,
-                ESTOQUE: quantidadeOPOriginal,
-                QTDSEPARADA: qtdRetirar,
-                USUARIO: usuario,
-                OP: Number(idiproc),
-                UNIDADE: unidadeOP,
-                LOTE: lote
-              },
-              emSeparacao: undefined // ← REMOVER O ESTADO DE EM SEPARAÇÃO
-            };
-          }
-          return item;
-        }));
+      setDados(prev => prev.map(item => {
+        if (item.COD_MP === codProd) {
+          return {
+            ...item,
+            separado: {
+              CODPROD: codProd,
+              DESCRPROD: descricaoProduto,
+              ESTOQUE: quantidadeOPOriginal,
+              QTDSEPARADA: qtdRetirar,
+              USUARIO: usuario,
+              OP: Number(idiproc),
+              UNIDADE: unidadeOP,
+              LOTE: lote
+            },
+            emSeparacao: undefined
+          };
+        }
+        return item;
+      }));
 
       setModalVisible(false);
       setDadosEndereco([]);
@@ -679,7 +731,7 @@ const buscarSeparacoesEmAndamento = async (idiproc: number) => {
   }
 };
 
-  const buscarDados = async () => {
+const buscarDados = async () => {
   if (!session?.jsessionid || !idiproc.trim()) return;
 
   try {
@@ -717,10 +769,10 @@ const buscarSeparacoesEmAndamento = async (idiproc: number) => {
           MP2.DESCRPROD AS PRODUTOMP,
           CASE
             WHEN (MP.QTDMISTURA * PA.QTDPRODUZIR) < 0
-              THEN REPLACE(FORMAT((MP.QTDMISTURA * PA.QTDPRODUZIR) * 1000, '#,0.#######', 'de-DE'), ',', '.') 
+              THEN REPLACE(FORMAT((MP.QTDMISTURA * PA.QTDPRODUZIR) * 1000, '#,0.####', 'de-DE'), ',', '.') 
                   + ' ' + MP.CODVOL
             ELSE
-              REPLACE(FORMAT((MP.QTDMISTURA * PA.QTDPRODUZIR), '#,0.#######', 'de-DE'), ',', '.') 
+              REPLACE(FORMAT((MP.QTDMISTURA * PA.QTDPRODUZIR), '#,0.####', 'de-DE'), ',', '.') 
                   + ' ' + MP.CODVOL
           END AS QUANTIDADE,
           MP.CODVOL AS UNIDADE,
@@ -822,7 +874,7 @@ const buscarSeparacoesEmAndamento = async (idiproc: number) => {
   const todosItensSeparados = () => {
     if (dados.length === 0) return false;
     return dados.every(item => item.separado);
-  };
+};
   return (
   <SafeAreaView style={styles.container}>
     <View style={styles.header}>
@@ -901,56 +953,56 @@ const buscarSeparacoesEmAndamento = async (idiproc: number) => {
       )}
 
     <FlatList
-  data={dados}
-  keyExtractor={(item, index) => index.toString()}
-  scrollEnabled={false}
-  renderItem={({ item }) => (
-    <TouchableOpacity
-      style={[
-        styles.materialCard,
-        // Aplica laranja apenas se estiver em separação E NÃO separado
-        (item.emSeparacao && !item.separado) && styles.emSeparacaoCard,
-        // Aplica verde se estiver separado (sobrescreve o laranja se necessário)
-        item.separado && styles.separadoCard,
-        // Adiciona estilo de desabilitado se não pode separar
-        !podeSepararItens && styles.itemDisabled
-      ]}
-      onPress={() => handleItemPress(item)}
-      // disabled={!podeSepararItens || item.emSeparacao || item.separado}
-    >
-      <View style={styles.materialHeader}>
-        <Text style={styles.materialValue}>{item.COD_MP} - {item.PRODUTOMP}</Text>
-      </View>
-      
-      <View style={styles.materialHeader}>
-        <Text style={styles.loteText}>Lote OP: {item.LOTE}</Text>
-        <Text style={styles.materialQuantity}>Qtd OP: {item.QUANTIDADE}</Text>
-      </View>
+      data={dados}
+      keyExtractor={(item, index) => index.toString()}
+      scrollEnabled={false}
+      renderItem={({ item }) => (
+        <TouchableOpacity
+          style={[
+            styles.materialCard,
+            // Aplica laranja apenas se estiver em separação E NÃO separado
+            (item.emSeparacao && !item.separado) && styles.emSeparacaoCard,
+            // Aplica verde se estiver separado (sobrescreve o laranja se necessário)
+            item.separado && styles.separadoCard,
+            // Adiciona estilo de desabilitado se não pode separar
+            !podeSepararItens && styles.itemDisabled
+          ]}
+          onPress={() => handleItemPress(item)}
+          // disabled={!podeSepararItens || item.emSeparacao || item.separado}
+        >
+          <View style={styles.materialHeader}>
+            <Text style={styles.materialValue}>{item.COD_MP} - {item.PRODUTOMP}</Text>
+          </View>
+          
+          <View style={styles.materialHeader}>
+            <Text style={styles.loteText}>Lote OP: {item.LOTE}</Text>
+            <Text style={styles.materialQuantity}>Qtd OP: {item.QUANTIDADE}</Text>
+          </View>
 
-      {item.emSeparacao && !item.separado && (
-        <View style={styles.emSeparacaoContainer}>
-          <Ionicons name="lock-closed" size={16} color="#ff9800" />
-          <Text style={styles.emSeparacaoText}>
-            Em separação por: {item.emSeparacao.USUARIO}
-          </Text>
-        </View>
+          {item.emSeparacao && !item.separado && (
+            <View style={styles.emSeparacaoContainer}>
+              <Ionicons name="lock-closed" size={16} color="#ff9800" />
+              <Text style={styles.emSeparacaoText}>
+                Em separação por: {item.emSeparacao.USUARIO}
+              </Text>
+            </View>
+          )}
+          
+          {item.separado && (
+            <View style={styles.separadoContainer}>
+              <View style={styles.separadoRow}>
+                <Ionicons name="checkmark-circle" size={16} color="#2e7d32" />
+                <Text style={styles.separadoText}>Separação concluída ({item.separado.UNIDADE})</Text>
+              </View>
+              <View style={styles.separadoDetails}>
+                <Text style={styles.separadoDetail}>Qtd: {item.separado.QTDSEPARADA} </Text>
+                <Text style={styles.separadoDetail}>Por: {item.separado.USUARIO}</Text>
+              </View>
+            </View>
+          )}
+        </TouchableOpacity>
       )}
-      
-      {item.separado && (
-        <View style={styles.separadoContainer}>
-          <View style={styles.separadoRow}>
-            <Ionicons name="checkmark-circle" size={16} color="#2e7d32" />
-            <Text style={styles.separadoText}>Separação concluída ({item.separado.UNIDADE})</Text>
-          </View>
-          <View style={styles.separadoDetails}>
-            <Text style={styles.separadoDetail}>Qtd: {item.separado.QTDSEPARADA} </Text>
-            <Text style={styles.separadoDetail}>Por: {item.separado.USUARIO}</Text>
-          </View>
-        </View>
-      )}
-    </TouchableOpacity>
-  )}
-/>
+    />
 
     </ScrollView>
 
@@ -1033,55 +1085,72 @@ const buscarSeparacoesEmAndamento = async (idiproc: number) => {
                       <Text style={{ marginBottom: 16 }}>
                         <Text style={{ fontWeight: 'bold' }}>Qtd OP:</Text> {itemOPModal?.QUANTIDADE || 'N/A'}
                       </Text>
-                      <Text style={{ marginBottom: 16, color: '#1976d2', fontWeight: 'bold' }}>
+                      <View >
+                        <Text style={{ fontWeight: 'bold' }}>Estoques por Local:</Text>
+                        <Text >
+                          📦 Almox (50000000): {dadosEndereco[0]?.ESTOQUE_ALMOX?.toFixed(4) || '0.0000'}
+                        </Text>
+                        <Text >
+                          📦 GP1 (120000000): {dadosEndereco[0]?.ESTOQUE_GP1?.toFixed(4) || '0.0000'}
+                        </Text>
+                        <Text >
+                          📦 GP2 (130000000): {dadosEndereco[0]?.ESTOQUE_GP2?.toFixed(4) || '0.0000'}
+                        </Text>
+                      </View>
+
+                      <Text style={{ marginBottom: 16, fontWeight: 'bold', color: '#1976d2' }}>
+                        📊 Estoque Total: {dadosEndereco[0]?.ESTOQUE_TOTAL?.toFixed(4) || '0.0000'}
+                      </Text>
+                      {/* <Text style={{ marginBottom: 16, color: '#1976d2', fontWeight: 'bold' }}>
                         <Text style={{ fontWeight: 'bold' }}>Máximo Permitido:</Text> {(
                           parseFloat((itemOPModal?.QUANTIDADE || '0').replace(',', '.')) * 2
                         ).toFixed(3)}
-                      </Text>
+                      </Text> */}
 
                       <TextInput
                         style={styles.input}
                         placeholder="Digite o lote"
+                        keyboardType="numeric"
                         value={loteRetirada}
                         onChangeText={setLoteRetirada}
                         autoCapitalize="characters"
                       />
 
                       <TextInput
-                        style={styles.input}
-                        placeholder={`Quantidade a retirar`}
-                        keyboardType="numeric"
-                        value={quantidadeRetirada}
-                        onChangeText={(text) => {
-                          let formattedText = text.replace(',', '.');
-                          formattedText = formattedText.replace(/[^0-9.]/g, '');
-                          
-                          const parts = formattedText.split('.');
-                          if (parts.length > 2) {
-                            formattedText = parts[0] + '.' + parts.slice(1).join('');
-                          }
-                          
-                          if (parts.length === 2) {
-                            if (parts[1].length > 3) {
-                              formattedText = parts[0] + '.' + parts[1].substring(0, 3);
-                            } else if (parts[1].length < 3) {
-                              formattedText = parts[0] + '.' + parts[1];
+                          style={styles.input}
+                          placeholder={`Qtd a retirar (máx: ${dadosEndereco[0]?.ESTOQUE_TOTAL?.toFixed(4) || '0.0000'})`}
+                          keyboardType="numeric"
+                          value={quantidadeRetirada}
+                          onChangeText={(text) => {
+                            let formattedText = text.replace(',', '.');
+                            formattedText = formattedText.replace(/[^0-9.]/g, '');
+                            
+                            const parts = formattedText.split('.');
+                            if (parts.length > 2) {
+                              formattedText = parts[0] + '.' + parts.slice(1).join('');
                             }
-                          }
-                          
-                          setQuantidadeRetirada(formattedText);
-                        }}
-                        onBlur={() => {
-                          const parts = quantidadeRetirada.split('.');
-                          if (parts.length === 2 && parts[1].length !== 3) {
-                            Alert.alert(
-                              'Formato incorreto',
-                              `A quantidade deve ter exatamente 3 casas decimais após o ponto.\nExemplo: 1.123`
-                            );
-                            setQuantidadeRetirada('');
-                          }
-                        }}
-                      />
+                            
+                            // ALTERADO: Permite até 4 casas decimais
+                            if (parts.length === 2) {
+                              if (parts[1].length > 4) {
+                                formattedText = parts[0] + '.' + parts[1].substring(0, 4);
+                              }
+                            }
+                            
+                            setQuantidadeRetirada(formattedText);
+                          }}
+                          onBlur={() => {
+                            const parts = quantidadeRetirada.split('.');
+                            // ALTERADO: Aviso para máximo de 4 casas decimais
+                            if (parts.length === 2 && parts[1].length > 4) {
+                              Alert.alert(
+                                'Formato incorreto',
+                                `A quantidade deve ter no máximo 4 casas decimais após o ponto.\nExemplo: 1.1234`
+                              );
+                              setQuantidadeRetirada('');
+                            }
+                          }}
+                        />
 
                       <TouchableOpacity
                         style={[
@@ -1181,6 +1250,39 @@ const buscarSeparacoesEmAndamento = async (idiproc: number) => {
       </View>
     </Modal>
 
+    {/* Modal de Sucesso */}
+<Modal
+  animationType="fade"
+  transparent={true}
+  visible={modalSucessoVisible}
+  onRequestClose={() => setModalSucessoVisible(false)}
+>
+  <View style={styles.modalSucessoContainer}>
+    <View style={styles.modalSucessoContent}>
+      {/* Ícone de confirmação */}
+      <View style={styles.sucessoIconContainer}>
+        <Ionicons name="checkmark-circle" size={60} color="#2e7d32" />
+      </View>
+      
+      {/* Mensagem */}
+      <Text style={styles.sucessoTitle}>Sucesso!</Text>
+      <Text style={styles.sucessoMessage}>{mensagemSucesso}</Text>
+      
+      {/* Botão de OK */}
+      <TouchableOpacity 
+        style={styles.sucessoButton}
+        onPress={() => {
+          setModalSucessoVisible(false);
+          // Opcional: navegar para outra tela ou resetar estado
+          router.back();
+        }}
+      >
+        <Text style={styles.sucessoButtonText}>OK</Text>
+      </TouchableOpacity>
+    </View>
+  </View>
+</Modal>
+
     {progressoFinalizacao && (
       <View style={styles.progressContainer}>
         <View style={styles.progressBar}>
@@ -1201,6 +1303,54 @@ const styles = StyleSheet.create({
   scrollContent: {
     flexGrow: 1,
     paddingBottom: 20,
+  },
+   modalSucessoContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+  },
+  modalSucessoContent: {
+    backgroundColor: 'white',
+    borderRadius: 15,
+    padding: 25,
+    alignItems: 'center',
+    width: '80%',
+    shadowColor: '#000',
+    shadowOffset: {
+      width: 0,
+      height: 2,
+    },
+    shadowOpacity: 0.25,
+    shadowRadius: 4,
+    elevation: 5,
+  },
+  sucessoIconContainer: {
+    marginBottom: 15,
+  },
+  sucessoTitle: {
+    fontSize: 20,
+    fontWeight: 'bold',
+    color: '#2e7d32',
+    marginBottom: 10,
+  },
+  sucessoMessage: {
+    fontSize: 16,
+    textAlign: 'center',
+    marginBottom: 20,
+    color: '#333',
+    lineHeight: 22,
+  },
+  sucessoButton: {
+    backgroundColor: '#2e7d32',
+    paddingVertical: 12,
+    paddingHorizontal: 30,
+    borderRadius: 8,
+  },
+  sucessoButtonText: {
+    color: 'white',
+    fontWeight: 'bold',
+    fontSize: 16,
   },
    loteText: {
     fontSize: 12,
@@ -1412,13 +1562,14 @@ const styles = StyleSheet.create({
     borderRadius: 8,
     marginBottom: 8,
     borderWidth: 1,
-    borderColor: '#b8daff',
+    borderColor: '#FAB243',
+    backgroundColor: '#fff8e1',
   },
   detalhesTitulo: {
     fontWeight: 'bold',
     fontSize: 16,
     marginBottom: 8,
-    color: '#004085',
+    color: '#FAB243',
   },
   detalhesLinha: {
     flexDirection: 'row',
@@ -1441,13 +1592,13 @@ const styles = StyleSheet.create({
     borderRadius: 6,
   },
   enderecoItemSelected: {
-    backgroundColor: '#e3f2fd',
+    backgroundColor: '#FAB243',
     borderLeftWidth: 4,
-    borderLeftColor: '#2196F3',
+    borderLeftColor: '#ffcd2b',
   },
   enderecoText: {
     fontWeight: 'bold',
-    fontSize: 14,
+    fontSize: 20,
     color: '#333',
   },
   enderecoDetail: {
@@ -1483,6 +1634,7 @@ const styles = StyleSheet.create({
   enderecoList: {
     maxHeight: 200,
     marginBottom: 4,
+    
   },
   noDataText: {
     textAlign: 'center',
