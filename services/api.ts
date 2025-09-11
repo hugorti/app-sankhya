@@ -347,7 +347,7 @@ export const login = async (username: string, password: string): Promise<LoginRe
     return sessionData;
 
   } catch (error) {
-    // console.error('Erro no login:', error);
+    console.error('Erro no login:', error);
     throw new Error(
       axios.isAxiosError(error)
         ? 'Erro de conexão com o servidor'
@@ -1318,29 +1318,32 @@ export const finalizarSeparacaoCompleta = async (data: {
   }
 };
 
+// CORREÇÃO: Função para salvar/atualizar lote com key
 export const salvarLoteAPI = async (
   nunota: number,
-  lote: string
+  codprod: number,
+  lote: string,
+  dataValidade: string
 ): Promise<any> => {
   try {
-    console.log('🔄 Iniciando salvamento do lote:', { nunota, lote });
-    
-    // Primeiro, verificar se já existe um registro para esta nota
-    const sqlVerificacao = `
+    console.log('🔄 Iniciando salvamento do lote:', { nunota, codprod, lote });
+
+    // Primeiro, verificar e criar/atualizar o vínculo na AD_LOTESALMOX
+    const sqlVerificacaoLote = `
       SELECT NUNOTA FROM AD_LOTESALMOX WHERE NUNOTA = ${nunota}
     `;
     
-    let existeRegistro = false;
+    let existeLote = false;
     try {
-      const resultVerificacao = await queryJson('DbExplorerSP.executeQuery', { sql: sqlVerificacao });
-      existeRegistro = resultVerificacao.rows.length > 0;
-      console.log('📋 Verificação de registro existente:', existeRegistro);
+      const resultVerificacao = await queryJson('DbExplorerSP.executeQuery', { sql: sqlVerificacaoLote });
+      existeLote = resultVerificacao.rows.length > 0;
+      console.log('📋 Verificação de registro em AD_LOTESALMOX:', existeLote);
     } catch (error) {
-      console.log('ℹ️ Não foi possível verificar registro existente, assumindo que não existe');
+      console.log('ℹ️ Não foi possível verificar registro em AD_LOTESALMOX');
     }
 
-    // Montar o requestBody com ou sem key dependendo se já existe
-    const requestBody = {
+    // 1. Criar/Atualizar vínculo na AD_LOTESALMOX
+    const requestBodyLoteSalmax = {
       serviceName: "CRUDServiceProvider.saveRecord",
       requestBody: {
         dataSet: {
@@ -1349,10 +1352,8 @@ export const salvarLoteAPI = async (
           dataRow: {
             localFields: {
               NUNOTA: { "$": nunota },
-              LOTE: { "$": lote.trim() }
             },
-            // Incluir key apenas se já existir registro (para UPDATE)
-            ...(existeRegistro && {
+            ...(existeLote && {
               key: {
                 NUNOTA: { "$": nunota }
               }
@@ -1360,18 +1361,18 @@ export const salvarLoteAPI = async (
           },
           entity: {
             fieldset: {
-              list: "NUNOTA, LOTE"
+              list: "NUNOTA"
             }
           }
         }
       }
     };
 
-    console.log('📤 Enviando requisição para salvar lote:', JSON.stringify(requestBody, null, 2));
+    console.log('📤 Enviando requisição para AD_LOTESALMOX:', JSON.stringify(requestBodyLoteSalmax, null, 2));
 
-    const response = await api.post(
+    const responseLoteSalmax = await api.post(
       'mge/service.sbr?serviceName=CRUDServiceProvider.saveRecord&outputType=json',
-      requestBody,
+      requestBodyLoteSalmax,
       { 
         headers: { 
           'Content-Type': 'application/json',
@@ -1380,20 +1381,98 @@ export const salvarLoteAPI = async (
       }
     );
 
-    console.log('📥 Resposta recebida:', JSON.stringify(response.data, null, 2));
+    console.log('📥 Resposta AD_LOTESALMOX:', JSON.stringify(responseLoteSalmax.data, null, 2));
 
-    if (response.data.status === "1") {
-      console.log('✅ Lote salvo/atualizado com sucesso');
+    if (responseLoteSalmax.data.status !== "1") {
+      const errorMsg = responseLoteSalmax.data.statusMessage || 'Erro ao salvar vínculo da nota';
+      console.error('❌ Erro na AD_LOTESALMOX:', errorMsg);
+      throw new Error(errorMsg);
+    }
+
+    console.log('✅ Vínculo da nota salvo/atualizado com sucesso');
+
+    // 2. Agora salvar/atualizar o produto e lote na AD_LOTESPROD
+    // Primeiro precisamos verificar se já existe e obter o CODIGO se existir
+    const sqlVerificacaoProd = `
+      SELECT CODIGO, NUNOTA, CODPROD FROM AD_LOTESPROD 
+      WHERE NUNOTA = ${nunota} AND CODPROD = ${codprod}
+    `;
+    
+    let codigoExistente = null;
+    let existeProduto = false;
+    
+    try {
+      const resultVerificacaoProd = await queryJson('DbExplorerSP.executeQuery', { sql: sqlVerificacaoProd });
+      existeProduto = resultVerificacaoProd.rows.length > 0;
+      
+      if (existeProduto) {
+        codigoExistente = resultVerificacaoProd.rows[0][0]; // CODIGO é a primeira coluna
+        console.log('📋 Registro existente em AD_LOTESPROD, CODIGO:', codigoExistente);
+      } else {
+        console.log('📋 Nenhum registro existente em AD_LOTESPROD');
+      }
+    } catch (error) {
+      console.log('ℹ️ Não foi possível verificar registro em AD_LOTESPROD');
+    }
+
+    // Montar o requestBody para AD_LOTESPROD
+    const requestBodyLoteProd = {
+      serviceName: "CRUDServiceProvider.saveRecord",
+      requestBody: {
+        dataSet: {
+          rootEntity: "AD_LOTESPROD",
+          includePresentationFields: "N",
+          dataRow: {
+            localFields: {
+              NUNOTA: { "$": nunota },
+              CODPROD: { "$": codprod },
+              LOTE: { "$": lote.trim() },
+              DATAVAL: { "$": dataValidade }
+            },
+            // Incluir key apenas se já existir registro (para UPDATE)
+            ...(existeProduto && codigoExistente && {
+              key: {
+                CODIGO: { "$": codigoExistente }
+              }
+            })
+          },
+          entity: {
+            fieldset: {
+              list: "NUNOTA, CODPROD, LOTE"
+            }
+          }
+        }
+      }
+    };
+
+    console.log('📤 Enviando requisição para AD_LOTESPROD:', JSON.stringify(requestBodyLoteProd, null, 2));
+
+    const responseLoteProd = await api.post(
+      'mge/service.sbr?serviceName=CRUDServiceProvider.saveRecord&outputType=json',
+      requestBodyLoteProd,
+      { 
+        headers: { 
+          'Content-Type': 'application/json',
+          'Accept': 'application/json'
+        } 
+      }
+    );
+
+    console.log('📥 Resposta AD_LOTESPROD:', JSON.stringify(responseLoteProd.data, null, 2));
+
+    if (responseLoteProd.data.status === "1") {
+      console.log('✅ Lote do produto salvo/atualizado com sucesso');
       return {
         success: true,
         nunota: nunota,
+        codprod: codprod,
         lote: lote,
-        operacao: existeRegistro ? 'atualizado' : 'criado',
-        message: existeRegistro ? 'Lote atualizado com sucesso!' : 'Lote vinculado com sucesso!'
+        operacao: existeProduto ? 'atualizado' : 'criado',
+        message: existeProduto ? 'Lote atualizado com sucesso!' : 'Lote vinculado com sucesso!'
       };
     } else {
-      const errorMsg = response.data.statusMessage || 'Erro ao salvar lote';
-      console.error('❌ Erro na resposta:', errorMsg);
+      const errorMsg = responseLoteProd.data.statusMessage || 'Erro ao salvar lote do produto';
+      console.error('❌ Erro na AD_LOTESPROD:', errorMsg);
       throw new Error(errorMsg);
     }
 
