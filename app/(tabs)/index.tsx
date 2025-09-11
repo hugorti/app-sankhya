@@ -1,5 +1,5 @@
 // app/(tabs)/index.tsx
-import { View, Text, StyleSheet, TouchableOpacity, Alert, ActivityIndicator } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, Alert, ActivityIndicator, Image } from 'react-native';
 import { useRouter } from 'expo-router';
 import { useSession } from '../../hooks/useSession';
 import { Ionicons } from '@expo/vector-icons';
@@ -82,7 +82,11 @@ export default function HomeScreen() {
     <View style={styles.container}>
       {/* Header */}
       <View style={styles.header}>
-        <Text style={styles.headerTitle}>WMS</Text>
+        <Image
+                  alt="Logo"
+                  source={require('../../assets/images/logobranco.png')}
+                  style={styles.logoImage}
+          />
         <View style={styles.userInfo}>
           <Text style={styles.userName}>{session.username}</Text>
           <TouchableOpacity onPress={handleLogout} style={styles.logoutButton}>
@@ -143,13 +147,17 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     alignItems: 'center',
     padding: 20,
-    backgroundColor: '#9c27b0',
+    backgroundColor: '#7E469B',
     paddingTop: 50,
   },
   headerTitle: {
     fontSize: 22,
     fontWeight: 'bold',
     color: 'white',
+  },
+  logoImage: {
+    width: 100,
+    height: 30,
   },
   userInfo: {
     flexDirection: 'row',

@@ -4,18 +4,18 @@
     "slug": "wms",
     "version": "1.0.2",
     "orientation": "portrait",
-    "icon": "./assets/images/logo.png",
+    "icon": "./assets/images/logowms.png",
     "scheme": "wms",
     "userInterfaceStyle": "automatic",
     "splash": {
-      "image": "./assets/images/logo.png",
+      "image": "./assets/images/logowms.png",
       "resizeMode": "contain"
     },
     "android": {
       "edgeToEdge": true,
       "adaptiveIcon": {
-        "foregroundImage": "./assets/images/logo.png",
-        "monochromeImage": "./assets/images/logo.png"
+        "foregroundImage": "./assets/images/logowms.png",
+        "monochromeImage": "./assets/images/logowms.png"
       },
       "package": "com.hugorodrigues.wms",
       "permissions": [
@@ -35,14 +35,14 @@
     },
     "web": {
       "bundler": "metro",
-      "favicon": "./assets/images/logo.png"
+      "favicon": "./assets/images/logowmsw.png"
     },
     "plugins": [
       "expo-router",
       [
         "expo-splash-screen",
         {
-          "image": "./assets/images/logo.png",
+          "image": "./assets/images/logowms.png",
           "resizeMode": "contain"
         }
       ],

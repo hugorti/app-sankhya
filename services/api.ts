@@ -1318,7 +1318,6 @@ export const finalizarSeparacaoCompleta = async (data: {
   }
 };
 
-// CORREÇÃO: Função para salvar/atualizar lote com key
 export const salvarLoteAPI = async (
   nunota: number,
   lote: string

@@ -8,7 +8,8 @@ import {
   ActivityIndicator, 
   Alert, 
   TouchableOpacity, 
-  SafeAreaView 
+  SafeAreaView, 
+  Image
 } from 'react-native';
 import { useRouter } from 'expo-router';
 import { useSession } from '../hooks/useSession';
@@ -126,7 +127,11 @@ const handleLoginError = (error: Error) => {
       />
       
       <View style={styles.logoContainer}>
-        <Text style={styles.title}>WMS LABOTRAT</Text>
+        <Image
+          alt="Logo"
+          source={require('../assets/images/logogrande.png')}
+          style={styles.logoImage}
+        />
         <Text style={styles.subtitle}>Sistema de gerenciamento</Text>
       </View>
       
@@ -212,16 +217,20 @@ const styles = StyleSheet.create({
     flex: 1,
     justifyContent: 'center',
     paddingHorizontal: 30,
-    backgroundColor: '#f3e5f5',
+    backgroundColor: '#efdeec',
   },
   logoContainer: {
     alignItems: 'center',
     marginBottom: 40,
   },
+   logoImage: {
+    width: 200,
+    height: 100,
+  },
   title: {
     fontSize: 32,
     fontWeight: 'bold',
-    color: '#6a1b9a',
+    color: '#7E469B',
     textAlign: 'center',
     marginBottom: 5,
     letterSpacing: 1,
@@ -231,7 +240,7 @@ const styles = StyleSheet.create({
   },
   subtitle: {
     fontSize: 16,
-    color: '#9c27b0',
+    color: '#7E469B',
     textAlign: 'center',
     fontWeight: '500',
   },
@@ -243,7 +252,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     borderWidth: 1,
     marginBottom: 10,
-    borderColor: '#ce93d8',
+    borderColor: '#7E469B',
     borderRadius: 12,
     backgroundColor: '#fafafa',
     overflow: 'hidden',
@@ -256,7 +265,7 @@ const styles = StyleSheet.create({
     height: 52,
     paddingHorizontal: 15,
     fontSize: 16,
-    color: '#4a148c',
+    color: '#7E469B',
     backgroundColor: 'transparent',
   },
   eyeButton: {
@@ -267,7 +276,7 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     justifyContent: 'center',
     alignItems: 'center',
-    backgroundColor: '#9c27b0',
+    backgroundColor: '#7E469B',
     marginTop: 20,
     shadowColor: '#6a1b9a',
     shadowOffset: { width: 0, height: 4 },
@@ -276,7 +285,7 @@ const styles = StyleSheet.create({
     elevation: 5,
   },
   buttonDisabled: {
-    backgroundColor: '#ba68c8',
+    backgroundColor: '#b1a0b9',
     shadowColor: 'transparent',
   },
   buttonLoading: {
@@ -296,7 +305,7 @@ const styles = StyleSheet.create({
     padding: 10,
   },
   configButtonText: {
-    color: '#9c27b0',
+    color: '#7E469B',
     fontSize: 14,
     marginLeft: 8,
     fontWeight: '500',
@@ -307,6 +316,6 @@ const styles = StyleSheet.create({
   },
   footerText: {
     fontSize: 12,
-    color: '#ab47bc',
+    color: '#7E469B',
   },
 });
