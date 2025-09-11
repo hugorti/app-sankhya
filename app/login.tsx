@@ -276,7 +276,7 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     justifyContent: 'center',
     alignItems: 'center',
-    backgroundColor: '#7E469B',
+    backgroundColor: '#6a1b9a',
     marginTop: 20,
     shadowColor: '#6a1b9a',
     shadowOffset: { width: 0, height: 4 },
@@ -285,7 +285,7 @@ const styles = StyleSheet.create({
     elevation: 5,
   },
   buttonDisabled: {
-    backgroundColor: '#b1a0b9',
+    backgroundColor: '#a972c5',
     shadowColor: 'transparent',
   },
   buttonLoading: {

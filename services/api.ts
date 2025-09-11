@@ -347,7 +347,7 @@ export const login = async (username: string, password: string): Promise<LoginRe
     return sessionData;
 
   } catch (error) {
-    console.error('Erro no login:', error);
+    // console.error('Erro no login:', error);
     throw new Error(
       axios.isAxiosError(error)
         ? 'Erro de conexão com o servidor'

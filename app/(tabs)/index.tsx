@@ -62,7 +62,7 @@ export default function HomeScreen() {
     }
     
     // Verifica acesso para Almoxarife e Romaneio
-    if ((screen === 'almoxarife' || screen === 'romaneio') && !hasAlmoxarifePermission()) {
+    if ((screen === 'almoxarife' || screen === 'recebimento') && !hasAlmoxarifePermission()) {
       Alert.alert('Acesso negado', 'Somente usuários autorizados podem acessar esta funcionalidade');
       return;
     }
@@ -126,10 +126,10 @@ export default function HomeScreen() {
 
           <TouchableOpacity 
             style={[styles.card, { backgroundColor: '#9C27B0' }]}
-            onPress={() => navigateTo('romaneio')}
+            onPress={() => navigateTo('recebimento')}
           >
             <Ionicons name="document-text-outline" size={48} color="white" />
-            <Text style={styles.cardText}>Separação</Text>
+            <Text style={styles.cardText}>Recebimento</Text>
           </TouchableOpacity>
         </View>
       </View>

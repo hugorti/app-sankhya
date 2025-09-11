@@ -12,7 +12,7 @@ export type RootStackParamList = {
     nunota: string;
   };
   almoxarife: undefined;
-  romaneio: undefined;
+  recebimento: undefined;
 };
 
 declare global {

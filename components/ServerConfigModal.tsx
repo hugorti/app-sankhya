@@ -207,11 +207,11 @@ const styles = StyleSheet.create({
   },
   exampleItem: {
     fontSize: 13,
-    color: '#ab47bc',
+    color: '#4a148c',
     marginLeft: 10,
   },
   saveButton: {
-    backgroundColor: '#9c27b0',
+    backgroundColor: '#4a148c',
     borderRadius: 8,
     padding: 15,
     alignItems: 'center',

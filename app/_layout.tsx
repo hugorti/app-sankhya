@@ -110,10 +110,10 @@ export default function RootLayout() {
         />
 
         <Stack.Screen 
-          name="romaneio" 
+          name="recebimento" 
           options={{ 
             headerShown: false,
-            title: 'Romaneio',
+            title: 'Recebimento',
             animation: 'slide_from_right',
             gestureEnabled: true
           }} 
