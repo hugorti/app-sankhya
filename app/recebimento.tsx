@@ -109,7 +109,8 @@ export default function LotesParceiroScreen() {
           PRO.REFERENCIA,
           CAB.CODEMP,
           LP.LOTE,
-          LP.DATAVAL
+          CONVERT(VARCHAR(10), LP.DATAVAL, 103) AS DATAVAL
+
         FROM
           TGFCAB CAB
           INNER JOIN TGFCON2 CON2 ON (CAB.NUCONFATUAL = CON2.NUCONF)
@@ -260,40 +261,32 @@ const abrirModalLote = (nota: NotaParceiro) => {
 };
 
 // Primeiro, crie uma função para formatar a data
-const formatarDataExibicao = (dataString: string) => {
+const formatarDataExibicao = (dataString?: string | null): string => {
   if (!dataString) return '';
-  
+
   try {
-    // Remove a parte da hora se existir
-    const dataLimpa = dataString.split(' ')[0];
-    
-    // Tenta diferentes formatos
-    if (dataLimpa.includes('-')) {
-      // Formato YYYY-MM-DD
-      const partes = dataLimpa.split('-');
-      if (partes.length === 3) {
-        return `${partes[2]}/${partes[1]}/${partes[0]}`;
-      }
-    } else if (dataLimpa.includes('/')) {
-      // Formato DD/MM/YYYY ou MM/DD/YYYY
-      const partes = dataLimpa.split('/');
-      if (partes.length === 3) {
-        // Se o primeiro número for maior que 12, assume DD/MM/YYYY
-        if (parseInt(partes[0]) > 12) {
-          return `${partes[0]}/${partes[1]}/${partes[2]}`;
-        } else {
-          return `${partes[1]}/${partes[0]}/${partes[2]}`;
-        }
-      }
+    const apenasData = dataString.split(/[T ]/)[0];
+
+    // YYYY-MM-DD → DD/MM/YYYY
+    if (/^\d{4}-\d{2}-\d{2}$/.test(apenasData)) {
+      const [ano, mes, dia] = apenasData.split('-');
+      return `${dia}/${mes}/${ano}`;
     }
-    
-    // Se não conseguir formatar, retorna a string original
-    return dataLimpa;
-  } catch (error) {
-    console.error('Erro ao formatar data:', error);
-    return dataString;
+
+    // DDMMYYYY → DD/MM/YYYY
+    if (/^\d{8}$/.test(apenasData)) {
+      const dia = apenasData.substring(0, 2);
+      const mes = apenasData.substring(2, 4);
+      const ano = apenasData.substring(4, 8);
+      return `${dia}/${mes}/${ano}`;
+    }
+
+    return apenasData;
+  } catch {
+    return String(dataString);
   }
 };
+
 
 // No renderItem, use a função de formatação:
 const renderItem = ({ item }: { item: NotaParceiro }) => (
