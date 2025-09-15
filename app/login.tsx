@@ -132,7 +132,7 @@ const handleLoginError = (error: Error) => {
           source={require('../assets/images/logogrande.png')}
           style={styles.logoImage}
         />
-        <Text style={styles.subtitle}>Sistema de gerenciamento</Text>
+        <Text style={styles.subtitle}>Sistema de Gestão</Text>
       </View>
       
       {/* Campo de Usuário */}

@@ -303,9 +303,8 @@ const renderItem = ({ item }: { item: NotaParceiro }) => (
     </View>
     
     <View style={styles.notaBody}>
-      <Text style={styles.codprod}>Cód. Produto: {item.CODPROD || 'N/A'}</Text>
-      <Text style={styles.produtoTexto}>{item.DESCRPROD || 'Produto não informado'}</Text>
-      <Text style={styles.referencia}>Ref: {item.REFERENCIA || 'N/A'}</Text>
+      <Text style={styles.produtoTexto}>{item.CODPROD} - {item.DESCRPROD || 'Produto não informado'}</Text>
+      {/* <Text style={styles.referencia}>Ref: {item.REFERENCIA || 'N/A'}</Text> */}
       
       {/* Quantidade e Data de Validade na mesma linha */}
       <View style={styles.quantidadeContainer}>
@@ -320,7 +319,7 @@ const renderItem = ({ item }: { item: NotaParceiro }) => (
       {/* Container do Lote (aparece apenas se tiver lote vinculado) */}
       {item.loteVinculado && (
         <View style={styles.loteContainer}>
-          <Ionicons name="pricetag" size={16} color="#2e7d32" />
+          <Ionicons name="pricetag" size={16} color="#fff" />
           <Text style={styles.loteText}>LOTE: {item.loteVinculado}</Text>
           <Ionicons name="checkmark-circle" size={16} color="#2e7d32" style={styles.checkIcon} />
         </View>
@@ -349,7 +348,7 @@ const anos = Array.from({ length: 10 }, (_, i) => (new Date().getFullYear() + i)
         <Ionicons name="search" size={20} color="#999" style={styles.searchIcon} />
         <TextInput
           style={styles.searchInput}
-          placeholder="Buscar por nota, parceiro, produto ou código..."
+          placeholder="Buscar por nota"
           placeholderTextColor="#999"
           value={searchQuery}
           onChangeText={setSearchQuery}
@@ -405,7 +404,7 @@ const anos = Array.from({ length: 10 }, (_, i) => (new Date().getFullYear() + i)
 
       {loading ? (
         <View style={styles.loadingContainer}>
-          <ActivityIndicator size="large" color="#4CAF50" />
+          <ActivityIndicator size="large" color="#9C27B0" />
           <Text style={styles.loadingText}>Carregando notas...</Text>
         </View>
       ) : notasFiltradas.length === 0 ? (
@@ -433,7 +432,7 @@ const anos = Array.from({ length: 10 }, (_, i) => (new Date().getFullYear() + i)
         <View style={styles.modalOverlay}>
           <View style={styles.modalContent}>
             <Text style={styles.modalTitle}>
-              {notaSelecionada?.loteVinculado ? 'EDITAR Lote Vinculado' : 'Vincular Lote'}
+              {notaSelecionada?.loteVinculado ? 'Lote Vinculado' : 'Vincular Lote'}
             </Text>
             
             {notaSelecionada && (
@@ -444,18 +443,13 @@ const anos = Array.from({ length: 10 }, (_, i) => (new Date().getFullYear() + i)
                 </View>
                 
                 <View style={styles.modalInfo}>
-                  <Text style={styles.modalLabel}>Cód. Produto:</Text>
-                  <Text style={styles.modalValue}>{notaSelecionada.CODPROD}</Text>
                 </View>
-                
                 <View style={styles.modalInfo}>
                   <Text style={styles.modalLabel}>Produto:</Text>
-                  <Text style={styles.modalValue}>{notaSelecionada.DESCRPROD}</Text>
+                  <Text style={styles.modalValue}>{notaSelecionada.CODPROD} - {notaSelecionada.DESCRPROD}</Text>
                 </View>
                 
                 <View style={styles.modalInfo}>
-                  <Text style={styles.modalLabel}>Parceiro:</Text>
-                  <Text style={styles.modalValue}>{notaSelecionada.NOMEPARC}</Text>
                 </View>
 
                 {notaSelecionada.loteVinculado && (
@@ -637,7 +631,7 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     alignItems: 'center',
     padding: 16,
-    backgroundColor: '#4CAF50',
+    backgroundColor: '#9C27B0',
     paddingTop: 50,
   },
   headerTitle: {
@@ -661,7 +655,7 @@ const styles = StyleSheet.create({
   searchInput: {
     flex: 1,
     padding: 12,
-    fontSize: 16,
+    fontSize: 18,
   },
   filtrosContainer: {
     flexDirection: 'row',
@@ -678,8 +672,8 @@ const styles = StyleSheet.create({
     borderColor: '#ccc',
   },
   filtroAtivo: {
-    backgroundColor: '#4CAF50',
-    borderColor: '#2E7D32',
+    backgroundColor: '#9C27B0',
+    borderColor: '#9C27B0',
   },
   filtroText: {
     color: '#666',
@@ -720,7 +714,7 @@ const styles = StyleSheet.create({
     borderRadius: 8,
     marginBottom: 12,
     borderLeftWidth: 4,
-    borderLeftColor: '#4CAF50',
+    borderLeftColor: '#9C27B0',
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.1,
@@ -728,16 +722,14 @@ const styles = StyleSheet.create({
     elevation: 2,
   },
   notaComLote: {
-    borderLeftColor: '#2e7d32',
+    borderLeftColor: '#9C27B0',
     backgroundColor: '#e8f5e9',
     borderWidth: 1,
     borderColor: '#c8e6c9',
   },
   notaHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
+    flexDirection: 'column',
     alignItems: 'flex-start',
-    marginBottom: 8,
   },
   notaNumero: {
     fontWeight: 'bold',
@@ -746,11 +738,10 @@ const styles = StyleSheet.create({
   },
   parceiroNome: {
     fontSize: 14,
-    color: '#4CAF50',
+    color: '#9C27B0',
     fontWeight: '600',
-    textAlign: 'right',
+    textAlign: 'left',
     flexShrink: 1,
-    marginLeft: 8,
   },
   notaBody: {
     marginTop: 4,
@@ -777,10 +768,10 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     marginTop: 10,
     padding: 10,
-    backgroundColor: '#2e7d32',
+    backgroundColor: '#9C27B0',
     borderRadius: 8,
     borderWidth: 1,
-    borderColor: '#1b5e20',
+    borderColor: '#9C27B0',
   },
   loteText: {
     color: 'white',
@@ -802,7 +793,7 @@ const styles = StyleSheet.create({
   },
   dataValidadeText: {
     fontSize: 12,
-    color: '#2e7d32', // Verde para destacar
+    color: '#9C27B0', // Verde para destacar
     fontWeight: '600',
   },
   checkIcon: {
@@ -836,11 +827,11 @@ const styles = StyleSheet.create({
   },
   modalInfo: {
     flexDirection: 'row',
-    marginBottom: 12,
+    marginBottom: 5,
   },
   modalLabel: {
     fontWeight: '600',
-    width: 100,
+    marginRight: 8,
     color: '#333',
   },
   modalValue: {
@@ -858,7 +849,7 @@ const styles = StyleSheet.create({
     borderColor: '#bbdefb',
   },
   loteAtualInfo: {
-    color: '#2e7d32',
+    color: '#9C27B0',
     fontSize: 14,
     marginLeft: 8,
   },
@@ -910,7 +901,7 @@ const styles = StyleSheet.create({
     backgroundColor: '#ccc',
   },
   saveButton: {
-    backgroundColor: '#4CAF50',
+    backgroundColor: '#9C27B0',
   },
   disabledButton: {
     backgroundColor: '#cccccc',
@@ -954,7 +945,7 @@ const styles = StyleSheet.create({
     backgroundColor: '#f5f5f5',
   },
   dateSelectorItemSelected: {
-    backgroundColor: '#4CAF50',
+    backgroundColor: '#9C27B0',
   },
   dateSelectorItemText: {
     color: '#333',
