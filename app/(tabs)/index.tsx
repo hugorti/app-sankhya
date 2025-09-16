@@ -171,7 +171,7 @@ export default function HomeScreen() {
         <View style={styles.footer}>
           <Text style={styles.footerText}>Sistema de Gestão</Text>
           <Text style={styles.footerText}>By: Hugo Rodrigues</Text>
-           <Text style={styles.footerText}>Copyright © Labotrat {currentYear}</Text>
+           <Text style={styles.footerText}>Copyright © tasksystem {currentYear}</Text>
         </View>
       </ScrollView>
     </View>

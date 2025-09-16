@@ -816,7 +816,7 @@ const styles = StyleSheet.create({
   dateSelectorModal: {
     width: '95%',
     maxWidth: 500,
-    height: '80%',
+    height: '90%',
   },
   modalTitle: {
     fontWeight: 'bold',
@@ -921,7 +921,7 @@ const styles = StyleSheet.create({
   dateSelectorContainer: {
     flexDirection: 'row',
     justifyContent: 'space-between',
-    height: 300,
+    height: 250,
     marginBottom: 20,
   },
   dateSelectorColumn: {
