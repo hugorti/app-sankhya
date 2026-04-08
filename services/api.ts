@@ -3,13 +3,17 @@ import axios, { AxiosError, AxiosInstance } from 'axios';
 import { Buffer } from 'buffer';
 import { XMLParser } from 'fast-xml-parser';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { Alert, AppState, AppStateStatus } from 'react-native';
+import { AppState, AppStateStatus } from 'react-native';
+import { AuthService } from './auth';
 
 const SERVER_URL_KEY = 'saved_server_url';
 const DEFAULT_IP = '';
 const DEFAULT_PORT = '8180';
 const DEFAULT_URL = `${DEFAULT_IP}:${DEFAULT_PORT}`;
 const INACTIVITY_TIMEOUT = 5 * 60 * 1000;
+
+// Nova URL base para consultas (API Sandbox Sankhya)
+const SANDBOX_BASE_URL = 'https://api.sandbox.sankhya.com.br/gateway/v1/mge/';
 
 const parser = new XMLParser({
   attributeNamePrefix: '@_',
@@ -31,58 +35,60 @@ let lastActivityTime: number | null = null;
 let onInactiveCallback: (() => Promise<void>) | null = null;
 let appStateSubscription: { remove: () => void } | null = null;
 
-// Adicione esta função para criar uma instância do axios para mgeprod
-const createMgeprodApi = (baseURL: string): AxiosInstance => {
-  const mgeprodBaseURL = baseURL.replace('/mge/', '/mgeprod/');
-  
-  return axios.create({
-    baseURL: mgeprodBaseURL,
-    timeout: 15000,
-    headers: {
-      'Content-Type': 'application/json',
-      'Accept': 'application/json'
-    }
-  });
-};
+// Inicializar AuthService
+const authService = AuthService.getInstance();
+
+// Criar instância do axios para login (rota original)
+let loginApi: AxiosInstance = axios.create({
+  baseURL: currentBaseURL,
+  timeout: 30000,
+  headers: {
+    'Content-Type': 'application/xml; charset=ISO-8859-1',
+    'Accept': 'application/xml'
+  }
+});
+
+// Criar instância do axios para consultas (nova rota Sandbox)
+let queryApi: AxiosInstance = axios.create({
+  baseURL: SANDBOX_BASE_URL,
+  timeout: 30000,
+  headers: {
+    'Content-Type': 'application/json',
+    'Accept': 'application/json'
+  }
+});
 
 // Funções para gerenciar inatividade
 export const setupInactivityListener = (callback: () => Promise<void>) => {
   onInactiveCallback = async () => {
     try {
-      await logout(true); // Logout automático
+      await logout(true);
       await callback();
     } catch (error) {
-      // Garante que a sessão seja removida mesmo com erro
       await AsyncStorage.removeItem('sankhya_session');
       await callback();
     }
   };
   
-  // Limpar subscription existente
   if (appStateSubscription) {
     appStateSubscription.remove();
     appStateSubscription = null;
   }
 
-  // Registrar tempo atual como última atividade
   lastActivityTime = Date.now();
 
-  // Configurar listener do estado do app
   appStateSubscription = AppState.addEventListener('change', async (nextAppState: AppStateStatus) => {
     if (nextAppState === 'active') {
-      // Quando o app volta ao ativo, verificar quanto tempo ficou inativo
       if (lastActivityTime) {
         const inactiveTime = Date.now() - lastActivityTime;
         if (inactiveTime >= INACTIVITY_TIMEOUT) {
           await callback();
         } else {
-          // Se ainda não passou o tempo limite, reiniciar o timer
           lastActivityTime = Date.now();
           resetInactivityTimer();
         }
       }
     } else {
-      // Quando o app vai para background, limpar o timer
       clearInactivityTimer();
     }
   });
@@ -104,7 +110,6 @@ export const resetInactivityTimer = () => {
     }, INACTIVITY_TIMEOUT) as unknown as number;
   }
   
-  // Atualizar o momento da última atividade
   lastActivityTime = Date.now();
 };
 
@@ -134,46 +139,15 @@ const formatServerUrl = (ipPort: string): string => {
   return `http://${ip}:${port}/mge/`;
 };
 
-const configureInterceptors = () => {
-  // Request interceptor
-  api.interceptors.request.use(async (config) => {
-    try {
-      const session = await AsyncStorage.getItem('sankhya_session');
-      if (session) {
-        const { jsessionid } = JSON.parse(session);
-        if (jsessionid) {
-          config.headers.Cookie = `JSESSIONID=${jsessionid}`;
-        }
-        resetInactivityTimer();
-      }
-      return config;
-    } catch (error) {
-      return config;
-    }
-  });
-
-  // Response interceptor (mantenha o mesmo que já temos)
-  api.interceptors.response.use(/* ... */);
-};
-
 // Set base URL with validation
 export const setBaseURL = async (ipPort: string): Promise<boolean> => {
   try {
     const formattedUrl = formatServerUrl(ipPort);
-    
-    // Testa a nova URL
     await axios.get(formattedUrl, { timeout: 5000 });
-    
-    // Atualiza a URL base global
     currentBaseURL = formattedUrl;
-    
-    // Recria a instância do axios com a nova URL
-    recreateApiInstance(currentBaseURL);
-    
-    // Salva a nova URL
+    recreateLoginApiInstance(currentBaseURL);
     const cleanIpPort = ipPort.replace(/^https?:\/\//, '').replace(/\/+$/, '');
     await AsyncStorage.setItem(SERVER_URL_KEY, cleanIpPort);
-    
     return true;
   } catch (error) {
     throw new Error(
@@ -186,14 +160,19 @@ export const setBaseURL = async (ipPort: string): Promise<boolean> => {
   }
 };
 
-// Initialize API with saved URL or default
+// Initialize API with saved URL
 export const initializeAPI = async (): Promise<void> => {
   try {
     const saved = await AsyncStorage.getItem(SERVER_URL_KEY);
     if (saved) {
       const formattedUrl = formatServerUrl(saved);
       currentBaseURL = formattedUrl;
-      recreateApiInstance(currentBaseURL);
+      recreateLoginApiInstance(currentBaseURL);
+    }
+    
+    const bearerToken = await authService.getBearerToken();
+    if (bearerToken) {
+      console.log('✅ Bearer token encontrado, API pronta');
     }
   } catch (error) {
     console.error('Failed to initialize API:', error);
@@ -201,74 +180,161 @@ export const initializeAPI = async (): Promise<void> => {
   }
 };
 
-const recreateApiInstance = (baseUrl: string) => {
-  api = axios.create({
+const recreateLoginApiInstance = (baseUrl: string) => {
+  loginApi = axios.create({
     baseURL: baseUrl,
-    timeout: 15000,
+    timeout: 30000,
     headers: {
       'Content-Type': 'application/xml; charset=ISO-8859-1',
       'Accept': 'application/xml'
     }
   });
-  configureInterceptors(); // Reconfigura os interceptors
+  configureLoginInterceptors();
 };
 
-// Mude de const para let
-let api: AxiosInstance = axios.create({
-  baseURL: currentBaseURL,
-  timeout: 15000,
-  headers: {
-    'Content-Type': 'application/xml; charset=ISO-8859-1',
-    'Accept': 'application/xml'
-  }
-});
-
-// Request interceptor for session handling
-api.interceptors.request.use(async (config) => {
-  try {
-    const session = await AsyncStorage.getItem('sankhya_session');
-    if (session) {
-      const { jsessionid } = JSON.parse(session);
-      if (jsessionid) {
-        config.headers.Cookie = `JSESSIONID=${jsessionid}`;
+// Configurar interceptors para Login API
+const configureLoginInterceptors = () => {
+  // Request interceptor para adicionar token Bearer
+  loginApi.interceptors.request.use(async (config) => {
+    try {
+      const bearerToken = await authService.getBearerToken();
+      
+      if (bearerToken) {
+        config.headers.Authorization = `Bearer ${bearerToken}`;
+      } else {
+        console.warn(`⚠️ Nenhum token disponível para: ${config.url}`);
       }
+      
+      const session = await AsyncStorage.getItem('sankhya_session');
+      if (session) {
+        const { jsessionid } = JSON.parse(session);
+        if (jsessionid) {
+          config.headers.Cookie = `JSESSIONID=${jsessionid}`;
+        }
+      }
+      
       resetInactivityTimer();
+      return config;
+    } catch (error) {
+      console.error('❌ Erro no interceptor:', error);
+      return config;
     }
-    return config;
-  } catch (error) {
-    return config;
-  }
-});
+  });
 
-// Response interceptor for error handling
-api.interceptors.response.use(
-  (response) => {
-    resetInactivityTimer();
-    return response;
-  },
-  async (error: AxiosError) => {
-    // Ignora erros de logout
-    if (error.config?.url?.includes('MobileLoginSP.logout')) {
+  // Response interceptor para tratar erros de autenticação
+  loginApi.interceptors.response.use(
+    (response) => {
+      resetInactivityTimer();
+      return response;
+    },
+    async (error: AxiosError) => {
+      if (error.config?.url?.includes('MobileLoginSP.logout')) {
+        return Promise.reject(error);
+      }
+
+      if (error.response?.status === 401) {
+        console.log('🔐 Token expirado, tentando renovar...');
+        
+        try {
+          await authService.invalidateToken();
+          const newToken = await authService.getBearerToken();
+          
+          if (newToken && error.config) {
+            console.log('✅ Token renovado, retentando requisição');
+            error.config.headers.Authorization = `Bearer ${newToken}`;
+            return loginApi(error.config);
+          }
+        } catch (refreshError) {
+          console.error('❌ Falha ao renovar token:', refreshError);
+          await AsyncStorage.removeItem('sankhya_session');
+          await authService.invalidateToken();
+        }
+      }
+      
+      if (error.response?.data && typeof error.response.data === 'string') {
+        if (error.response.data.includes('Bearer Token')) {
+          console.error('❌ Erro: Header token deve conter um Bearer Token');
+          await authService.invalidateToken();
+          const newToken = await authService.getBearerToken();
+          if (newToken && error.config) {
+            error.config.headers.Authorization = `Bearer ${newToken}`;
+            return loginApi(error.config);
+          }
+        }
+      }
+      
+      if (!error.response) {
+        if (error.code === 'ERR_NETWORK') {
+          return Promise.reject(new Error('Erro de conexão. Verifique sua internet.'));
+        }
+        throw new Error('Erro de comunicação com o servidor');
+      }
+      
       return Promise.reject(error);
     }
+  );
+};
 
-    // Trata outros erros
-    if (error.response?.status === 401) {
-      await AsyncStorage.removeItem('sankhya_session');
-      clearInactivityTimer();
-    } else if (!error.response) {
-      // Se não houve resposta, verifica se é erro de rede
-      if (error.code === 'ERR_NETWORK') {
-        // Mantém a sessão se for erro de réseau (pode ser temporário)
-        return Promise.reject(new Error('Erro de conexão. Verifique sua internet.'));
+// Configurar interceptors para Query API (Sandbox)
+const configureQueryInterceptors = () => {
+  queryApi.interceptors.request.use(async (config) => {
+    try {
+      const bearerToken = await authService.getBearerToken();
+      
+      if (bearerToken) {
+        config.headers.Authorization = `Bearer ${bearerToken}`;
+      } else {
+        console.warn(`⚠️ Nenhum token disponível para consulta: ${config.url}`);
       }
-      throw new Error('Erro de comunicação com o servidor');
+      
+      resetInactivityTimer();
+      return config;
+    } catch (error) {
+      console.error('❌ Erro no interceptor de consulta:', error);
+      return config;
     }
-    
-    return Promise.reject(error);
-  }
-);
+  });
 
+  queryApi.interceptors.response.use(
+    (response) => {
+      resetInactivityTimer();
+      return response;
+    },
+    async (error: AxiosError) => {
+      if (error.response?.status === 401) {
+        console.log('🔐 Token expirado na consulta, tentando renovar...');
+        
+        try {
+          await authService.invalidateToken();
+          const newToken = await authService.getBearerToken();
+          
+          if (newToken && error.config) {
+            console.log('✅ Token renovado, retentando consulta');
+            error.config.headers.Authorization = `Bearer ${newToken}`;
+            return queryApi(error.config);
+          }
+        } catch (refreshError) {
+          console.error('❌ Falha ao renovar token na consulta:', refreshError);
+        }
+      }
+      
+      if (!error.response) {
+        if (error.code === 'ERR_NETWORK') {
+          return Promise.reject(new Error('Erro de conexão. Verifique sua internet.'));
+        }
+        throw new Error('Erro de comunicação com o servidor');
+      }
+      
+      return Promise.reject(error);
+    }
+  );
+};
+
+// Executar configuração dos interceptors
+configureLoginInterceptors();
+configureQueryInterceptors();
+
+// Função de login (mantém a rota original)
 export const login = async (username: string, password: string): Promise<LoginResponse> => {
   const xmlRequest = `<?xml version="1.0" encoding="ISO-8859-1"?>
 <serviceRequest serviceName="MobileLoginSP.login">
@@ -279,10 +345,14 @@ export const login = async (username: string, password: string): Promise<LoginRe
 </serviceRequest>`;
 
   try {
-    // Limpa qualquer timer pendente
     clearInactivityTimer();
     
-    const response = await api.post(
+    const bearerToken = await authService.getBearerToken();
+    if (!bearerToken) {
+      throw new Error('Não foi possível obter token de autenticação');
+    }
+    
+    const response = await loginApi.post(
       'services.sbr?serviceName=MobileLoginSP.login',
       xmlRequest,
       { 
@@ -292,7 +362,10 @@ export const login = async (username: string, password: string): Promise<LoginRe
             throw new Error('Resposta vazia do servidor');
           }
           return data;
-        }]
+        }],
+        headers: {
+          'Authorization': `Bearer ${bearerToken}`
+        }
       }
     );
 
@@ -319,13 +392,8 @@ export const login = async (username: string, password: string): Promise<LoginRe
       throw new Error('Dados de sessão incompletos na resposta');
     }
 
-    // Extrair transactionId do serviceResponse
     const transactionId = result.serviceResponse['@_transactionId'] || '';
     
-    if (!transactionId) {
-      console.warn('TransactionId não encontrado na resposta do login');
-    }
-
     const sessionData: LoginResponse = {
       jsessionid: result.serviceResponse.responseBody.jsessionid,
       idusu: result.serviceResponse.responseBody.idusu.trim(),
@@ -343,11 +411,11 @@ export const login = async (username: string, password: string): Promise<LoginRe
       console.log('Sessão expirada por inatividade');
     });
 
-    console.log('Login realizado com sucesso. TransactionId:', transactionId);
+    console.log('✅ Login realizado com sucesso. TransactionId:', transactionId);
     return sessionData;
 
   } catch (error) {
-    console.error('Erro no login:', error);
+    console.error('❌ Erro no login:', error);
     throw new Error(
       axios.isAxiosError(error)
         ? 'Erro de conexão com o servidor'
@@ -358,49 +426,81 @@ export const login = async (username: string, password: string): Promise<LoginRe
   }
 };
 
+// Função de logout (usa a rota original)
 export const logout = async (isAutoLogout = false): Promise<void> => {
   try {
     clearInactivityTimer();
+    await authService.invalidateToken();
     
-    // Se for logout automático, tenta apenas uma vez rapidamente
     if (isAutoLogout) {
       await Promise.race([
-        api.post('services.sbr?serviceName=MobileLoginSP.logout'),
+        loginApi.post('services.sbr?serviceName=MobileLoginSP.logout'),
         new Promise((_, reject) => setTimeout(() => reject(new Error('Timeout')), 2000))
       ]);
     } else {
-      // Logout manual - tenta normalmente
-      await api.post('services.sbr?serviceName=MobileLoginSP.logout');
+      await loginApi.post('services.sbr?serviceName=MobileLoginSP.logout');
     }
   } catch (error) {
-    // Ignora erros específicos de network/timeout no logout automático
     if (!isAutoLogout || 
         (axios.isAxiosError(error) && error.code !== 'ECONNABORTED' && error.code !== 'ERR_NETWORK')) {
       console.warn('Logout error:', error);
     }
   } finally {
     await AsyncStorage.removeItem('sankhya_session');
+    await authService.invalidateToken();
   }
 };
 
-export const queryJson = async (serviceName: string, requestBody: object): Promise<any> => {
+// 🔧 FUNÇÃO QUERYJSON CORRIGIDA - Formato correto para API Sankhya Sandbox
+export const queryJson = async (serviceName: string, requestBody: any): Promise<any> => {
   try {
-    const response = await api.post(
+    const bearerToken = await authService.getBearerToken();
+    
+    if (!bearerToken) {
+      throw new Error('Token de autenticação não encontrado');
+    }
+    
+    // 🔧 CORREÇÃO: Enviar no formato correto que a API espera
+    const payload = {
+      serviceName: serviceName,
+      requestBody: requestBody
+    };
+    
+    console.log(`📤 Enviando requisição para: ${serviceName}`);
+    console.log('📦 Payload:', JSON.stringify(payload, null, 2));
+    
+    const response = await queryApi.post(
       `service.sbr?serviceName=${encodeURIComponent(serviceName)}&outputType=json`,
-      { requestBody },
-      { headers: { 'Content-Type': 'application/json' } }
+      payload,  // <- Agora enviando o objeto completo com serviceName e requestBody
+      { 
+        headers: { 
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${bearerToken}`
+        } 
+      }
     );
 
-    if (response.data.status !== "1") {
-      throw new Error(response.data.statusMessage || 'Erro na requisição');
+    console.log('📥 Resposta recebida, status:', response.status);
+    
+    // Verificar se a resposta tem a estrutura esperada
+    if (response.data && response.data.status !== undefined) {
+      if (response.data.status !== "1" && response.data.status !== 1) {
+        const errorMsg = response.data.statusMessage || 'Erro na requisição';
+        console.error('❌ Erro na resposta:', errorMsg);
+        throw new Error(errorMsg);
+      }
     }
 
-    return response.data.responseBody;
+    return response.data?.responseBody || response.data;
+    
   } catch (error) {
-    console.error('JSON query error:', error);
+    console.error('❌ JSON query error:', error);
+    if (axios.isAxiosError(error) && error.response) {
+      console.error('📋 Detalhes do erro:', error.response.data);
+    }
     throw new Error(
       axios.isAxiosError(error)
-        ? 'Erro de conexão com o servidor'
+        ? `Erro de conexão: ${error.message}`
         : error instanceof Error
           ? error.message
           : 'Erro desconhecido na consulta'
@@ -408,6 +508,27 @@ export const queryJson = async (serviceName: string, requestBody: object): Promi
   }
 };
 
+// Função para executar query SQL via DbExplorerSP
+export const executeQuery = async (sql: string): Promise<any> => {
+  try {
+    console.log('🔍 Executando SQL:', sql);
+    
+    const requestBody = {
+      sql: sql
+    };
+    
+    const result = await queryJson('DbExplorerSP.executeQuery', requestBody);
+    
+    console.log('✅ Query executada com sucesso');
+    return result;
+    
+  } catch (error) {
+    console.error('❌ Erro ao executar query:', error);
+    throw error;
+  }
+};
+
+// Função salvar conferência (usa Sandbox)
 export const salvarConferenciaAPI = async (data: {
   NUNOTA: number;
   ORDEMCARGA: number;
@@ -419,42 +540,31 @@ export const salvarConferenciaAPI = async (data: {
   const situacao = data.COMPLETA ? "Conferência completa" : "Conferência com divergência";
   
   const requestBody = {
-    serviceName: "CRUDServiceProvider.saveRecord",
-    requestBody: {
-      dataSet: {
-        rootEntity: "AD_EXPEDICAODASH",
-        includePresentationFields: "N",
-        dataRow: {
-          localFields: {
-            NUNOTA: { "$": data.NUNOTA },
-            CONFERENTE: { "$": data.CONFERENTE },
-            DESCRICAO: { "$": data.DESCRICAO },
-            ORDEMCARGA: { "$": data.ORDEMCARGA },
-            VOLUMES: { "$": data.VOLUMES },
-            SITUACAO: { "$": situacao }
-          }
-        },
-        entity: {
-          fieldset: {
-            list: "CODIGO,NUNOTA,CONFERENTE,VOLUMES,SITUACAO"
-          }
+    dataSet: {
+      rootEntity: "AD_EXPEDICAODASH",
+      includePresentationFields: "N",
+      dataRow: {
+        localFields: {
+          NUNOTA: { "$": data.NUNOTA },
+          CONFERENTE: { "$": data.CONFERENTE },
+          DESCRICAO: { "$": data.DESCRICAO },
+          ORDEMCARGA: { "$": data.ORDEMCARGA },
+          VOLUMES: { "$": data.VOLUMES },
+          SITUACAO: { "$": situacao }
+        }
+      },
+      entity: {
+        fieldset: {
+          list: "CODIGO,NUNOTA,CONFERENTE,VOLUMES,SITUACAO"
         }
       }
     }
   };
 
   try {
-    const response = await api.post(
-      'service.sbr?serviceName=CRUDServiceProvider.saveRecord&outputType=json',
-      requestBody,
-      { headers: { 'Content-Type': 'application/json' } }
-    );
-
-    if (response.data.status !== "1") {
-      throw new Error(response.data.statusMessage || 'Erro ao salvar');
-    }
-
-    return response.data.responseBody;
+    const result = await queryJson('CRUDServiceProvider.saveRecord', requestBody);
+    return result;
+    
   } catch (error) {
     console.error('Save conference error:', error);
     throw new Error(
@@ -467,31 +577,13 @@ export const salvarConferenciaAPI = async (data: {
   }
 };
 
-// Adicione esta função auxiliar para buscar o IDIATV da operação de EMBALAGEM
-const buscarIdiAtvEmbalagem = async (idiproc: number): Promise<number | null> => {
-  try {
-    const sql = `
-      SELECT ATV.IDIATV
-      FROM TPRIATV ATV
-      JOIN TPREFX FX ON FX.IDEFX = ATV.IDEFX
-      WHERE ATV.IDIPROC = ${idiproc} AND FX.DESCRICAO = 'EMBALAGEM' AND ATV.DHACEITE IS NOT NULL;
-    `;
-    
-    const result = await queryJson('DbExplorerSP.executeQuery', { sql });
-    return result.rows.length > 0 ? result.rows[0][0] : null;
-  } catch (error) {
-    console.error('Erro ao buscar IDIATV de embalagem:', error);
-    return null;
-  }
-};
-
-// Função auxiliar para buscar CODUSU
+// Função para buscar CODUSU (usa Sandbox)
 export const buscarCodUsu = async (username: string): Promise<number> => {
   try {
     const sql = `SELECT CODUSU FROM TSIUSU WHERE NOMEUSU = '${username}'`;
-    const result = await queryJson('DbExplorerSP.executeQuery', { sql });
+    const result = await executeQuery(sql);
     
-    if (result.rows.length > 0) {
+    if (result && result.rows && result.rows.length > 0) {
       return result.rows[0][0];
     } else {
       throw new Error('Usuário não encontrado na tabela TSIUSU');
@@ -500,825 +592,9 @@ export const buscarCodUsu = async (username: string): Promise<number> => {
     console.error('Erro ao buscar CODUSU:', error);
     throw error;
   }
-};
+}
 
-export const buscarDadosAtividadeEmbalagem = async (idiproc: number): Promise<{
-    IDIATV: number | null;
-    IDEFX: number | null;
-    IDIPROC: number | null;
-    IDPROC: number | null;
-      } | null> => {
-    try {
-    // Buscar dados da atividade de embalagem
-    const sqlAtividade = `
-      SELECT ATV.IDIATV, ATV.IDEFX, ATV.IDIPROC
-      FROM TPRIATV ATV
-      JOIN TPREFX FX ON FX.IDEFX = ATV.IDEFX
-      WHERE ATV.IDIPROC = ${idiproc} 
-        AND FX.DESCRICAO = 'EMBALAGEM' 
-        AND ATV.DHACEITE IS NOT NULL;
-    `;
-    
-    const resultAtividade = await queryJson('DbExplorerSP.executeQuery', { sql: sqlAtividade });
-    
-    if (resultAtividade.rows.length === 0) {
-      return null;
-    }
-
-    const atividade = resultAtividade.rows[0];
-    const IDIATV = atividade[0];
-    const IDEFX = atividade[1];
-    const IDIPROC = atividade[2];
-
-    // Buscar IDPROC da tabela TPRIPROC
-    const sqlProcesso = `
-      SELECT IDPROC 
-      FROM TPRIPROC 
-      WHERE IDIPROC = ${idiproc};
-    `;
-    
-    const resultProcesso = await queryJson('DbExplorerSP.executeQuery', { sql: sqlProcesso });
-    const IDPROC = resultProcesso.rows.length > 0 ? resultProcesso.rows[0][0] : null;
-
-    return {
-      IDIATV,
-      IDEFX,
-      IDIPROC,
-      IDPROC
-    };
-
-  } catch (error) {
-    console.error('Erro ao buscar dados da atividade de embalagem:', error);
-    return null;
-  }
-};
-
-export const buscarQuantidadesSeparadas = async (idiproc: number): Promise<Array<{CODPROD: number, QTDSEPARADA: number}>> => {
-  try {
-    const sql = `
-      SELECT DISTINCT
-        AD.QTDSEPARADA,
-        AD.CODPROD
-      FROM TGFCAB CAB 
-      JOIN TGFITE ITE 
-        ON ITE.NUNOTA = CAB.NUNOTA
-      JOIN AD_ALMOXARIFEWMS AD 
-        ON AD.OP = CAB.IDIPROC
-        AND AD.CODPROD = ITE.CODPROD
-      WHERE CAB.IDIPROC = ${idiproc} AND AD.QTDSEPARADA IS NOT NULL;
-    `;
-    
-    const result = await queryJson('DbExplorerSP.executeQuery', { sql });
-    
-    if (result.rows.length === 0) {
-      return [];
-    }
-
-    return result.rows.map((row: any) => ({
-      CODPROD: parseInt(row[1]),
-      QTDSEPARADA: parseFloat(row[0]) || 0
-    }));
-
-  } catch (error) {
-    console.error('Erro ao buscar quantidades separadas:', error);
-    throw new Error('Falha ao buscar quantidades separadas');
-  }
-};
-
-// Função para buscar as sequências dos itens da nota
-export const buscarSequenciasItensNota = async (nunota: number): Promise<Array<{CODPROD: number, SEQUENCIA: number, QTDORIGINAL: number}>> => {
-  try {
-    const sql = `
-      SELECT CODPROD, SEQUENCIA, QTDNEG
-      FROM TGFITE
-      WHERE NUNOTA = ${nunota}
-      ORDER BY SEQUENCIA;
-    `;
-    
-    const result = await queryJson('DbExplorerSP.executeQuery', { sql });
-    
-    if (result.rows.length === 0) {
-      return [];
-    }
-
-    return result.rows.map((row: any) => ({
-      CODPROD: parseInt(row[0]),
-      SEQUENCIA: parseInt(row[1]),
-      QTDORIGINAL: parseFloat(row[2]) || 0
-    }));
-
-  } catch (error) {
-    console.error('Erro ao buscar sequências dos itens:', error);
-    throw new Error('Falha ao buscar itens da nota');
-  }
-};
-
-export const buscarItensNota = async (nunota: number): Promise<Array<{CODPROD: number, SEQUENCIA: number, QTDNEG: number}>> => {
-  try {
-    const sql = `
-      SELECT CODPROD, SEQUENCIA, QTDNEG
-      FROM TGFITE
-      WHERE NUNOTA = ${nunota}
-      ORDER BY SEQUENCIA;
-    `;
-    
-    const result = await queryJson('DbExplorerSP.executeQuery', { sql });
-    
-    if (result.rows.length === 0) {
-      return [];
-    }
-
-    return result.rows.map((row: any) => ({
-      CODPROD: parseInt(row[0]),
-      SEQUENCIA: parseInt(row[1]),
-      QTDNEG: parseFloat(row[2]) || 0
-    }));
-
-  } catch (error) {
-    console.error('Erro ao buscar itens da nota:', error);
-    throw new Error('Falha ao buscar itens da nota');
-  }
-};
-
-// Vamos adicionar logs detalhados na função principal
-export const atualizarQuantidadesNota = async (
-  nunota: number,
-  quantidadesSeparadas: Array<{CODPROD: number, QTDSEPARADA: number}>
-): Promise<any> => {
-  try {
-    console.log('🔄 Buscando itens da nota:', nunota);
-    
-    // Buscar itens da nota
-    const itensNota = await buscarItensNota(nunota);
-    console.log('📝 Itens da nota:', itensNota);
-    
-    if (itensNota.length === 0) {
-      throw new Error('Nenhum item encontrado na nota');
-    }
-
-    const resultados = [];
-    let itensAtualizados = 0;
-
-    // ATUALIZAR CADA ITEM
-    for (const item of itensNota) {
-      const qtdSeparada = quantidadesSeparadas.find(q => q.CODPROD === item.CODPROD);
-      
-      if (qtdSeparada) {
-        console.log(`📦 Atualizando item ${item.CODPROD}, seq ${item.SEQUENCIA}: ${item.QTDNEG} -> ${qtdSeparada.QTDSEPARADA}`);
-        
-        try {
-          const requestBody = {
-            serviceName: "CRUDServiceProvider.saveRecord",
-            requestBody: {
-              dataSet: {
-                rootEntity: "ItemNota",
-                includePresentationFields: "N",
-                dataRow: {
-                  localFields: {
-                    CODPROD: { "$": item.CODPROD },
-                    QTDNEG: { "$": qtdSeparada.QTDSEPARADA.toString() },
-                    SEQUENCIA: { "$": item.SEQUENCIA }
-                  },
-                  key: {
-                    NUNOTA: { "$": nunota }
-                  }
-                },
-                entity: {
-                  fieldset: {
-                    list: "NUNOTA, CODPROD, QTDNEG"
-                  }
-                }
-              }
-            }
-          };
-
-          const response = await api.post(
-            'mge/service.sbr?serviceName=CRUDServiceProvider.saveRecord&outputType=json',
-            requestBody,
-            { 
-              headers: { 
-                'Content-Type': 'application/json',
-                'Accept': 'application/json'
-              } 
-            }
-          );
-
-          if (response.data.status === "1") {
-            resultados.push({
-              success: true,
-              CODPROD: item.CODPROD,
-              SEQUENCIA: item.SEQUENCIA,
-              QTDNEG: qtdSeparada.QTDSEPARADA
-            });
-            itensAtualizados++;
-            console.log(`✅ Item ${item.CODPROD} atualizado`);
-          } else {
-            throw new Error(response.data.statusMessage);
-          }
-
-        } catch (error: any) {
-          console.error(`❌ Erro ao atualizar item ${item.CODPROD}:`, error);
-          resultados.push({
-            success: false,
-            CODPROD: item.CODPROD,
-            SEQUENCIA: item.SEQUENCIA,
-            error: error.message
-          });
-        }
-      }
-    }
-
-    console.log(`✅ ${itensAtualizados} itens atualizados na nota ${nunota}`);
-    return {
-      success: true,
-      nunota: nunota,
-      itensAtualizados: itensAtualizados,
-      totalItens: itensNota.length,
-      detalhes: resultados
-    };
-
-  } catch (error) {
-    console.error('❌ Erro ao atualizar nota:', error);
-    throw error;
-  }
-};
-
-export const iniciarSeparacao = async (data: {
-  IDIPROC: number;
-  username: string;
-}): Promise<any> => {
-  try {
-    // Buscar o CODUSU com base no username
-    const codUsu = await buscarCodUsu(data.username);
-    
-    // Buscar o IDIATV da operação de EMBALAGEM
-    const idiAtv = await buscarIdiAtvEmbalagem(data.IDIPROC);
-    
-    if (!idiAtv) {
-      throw new Error('Não foi encontrada atividade de EMBALAGEM para esta OP');
-    }
-
-   // Ajustar para GMT-3 (Horário de Brasília)
-    const now = new Date();
-    const offset = -3; // GMT-3
-    now.setHours(now.getHours() + (now.getTimezoneOffset() / 60) + offset);
-
-    const day = String(now.getDate()).padStart(2, '0');
-    const month = String(now.getMonth() + 1).padStart(2, '0');
-    const year = now.getFullYear();
-    const hours = String(now.getHours()).padStart(2, '0');
-    const minutes = String(now.getMinutes()).padStart(2, '0');
-    const dataHora = `${day}/${month}/${year} ${hours}:${minutes}`;
-
-    // PRIMEIRO: Criar DHINICIO na InstanciaAtividade
-    const requestBodyInstancia = {
-      serviceName: "CRUDServiceProvider.saveRecord",
-      requestBody: {
-        dataSet: {
-          rootEntity: "InstanciaAtividade",
-          includePresentationFields: "N",
-          dataRow: {
-            localFields: {
-              IDIPROC: { "$": data.IDIPROC },
-              DHINICIO: { "$": dataHora },
-              CODUSU: { "$": codUsu }, 
-              CODULTEXEC: { "$": codUsu }, 
-            },
-            key: {
-              IDIATV: { "$": idiAtv }
-            }
-          },
-          entity: {
-            fieldset: {
-              list: "IDIPROC, DHINICIO, CODUSU, CODULTEXEC"
-            }
-          }
-        }
-      }
-    };
-
-    // Executar primeira requisição para InstanciaAtividade
-    const responseInstancia = await api.post(
-      'mge/service.sbr?serviceName=CRUDServiceProvider.saveRecord&outputType=json',
-      requestBodyInstancia,
-      { headers: { 'Content-Type': 'application/json' } }
-    );
-
-    if (responseInstancia.data.status !== "1") {
-      throw new Error(responseInstancia.data.statusMessage || 'Erro ao iniciar separação na InstanciaAtividade');
-    }
-
-    // Armazenar o timestamp de início para cálculo do tempo gasto
-    const inicioTimestamp = now.getTime();
-
-    // SEGUNDO: Criar ExecucaoAtividade com os mesmos dados da Instancia
-    const requestBodyExecucao = {
-      serviceName: "CRUDServiceProvider.saveRecord",
-      requestBody: {
-        dataSet: {
-          rootEntity: "ExecucaoAtividade",
-          includePresentationFields: "N",
-          dataRow: {
-            localFields: {
-              DHINICIO: { "$": dataHora }, // Mesmo DHINICIO da Instancia
-              IDIATV: { "$": idiAtv },     // Mesmo IDIATV da Instancia
-              CODEXEC: { "$": codUsu },    // CODUSU obtido da TSIUSU
-              CODUSU: { "$": codUsu },     // CODUSU obtido da TSIUSU
-              TIPO: { "$": "N" },          // Indicando que a execução foi finalizada
-              CODMTP: { "$": 0 }           // Código do motivo de finalização (0 = Normal)
-            }
-          },
-          entity: {
-            fieldset: {
-              list: "IDIATV, DHINICIO, CODEXEC, CODUSU, TIPO, CODMTP"
-            }
-          }
-        }
-      }
-    };
-
-    // Executar segunda requisição para ExecucaoAtividade
-    const responseExecucao = await api.post(
-      'mge/service.sbr?serviceName=CRUDServiceProvider.saveRecord&outputType=json',
-      requestBodyExecucao,
-      { headers: { 'Content-Type': 'application/json' } }
-    );
-
-    if (responseExecucao.data.status !== "1") {
-      throw new Error(responseExecucao.data.statusMessage || 'Erro ao criar ExecucaoAtividade');
-    }
-
-    // Retornar o IDEIATV gerado e o IDIATV para usar no finalizar
-    const ideiAtv = responseExecucao.data.responseBody.entities.entity.IDEIATV.$;
-    return {
-      instanciaAtividade: responseInstancia.data.responseBody,
-      execucaoAtividade: responseExecucao.data.responseBody,
-      IDEIATV: ideiAtv,
-      IDIATV: idiAtv,
-      CODUSU: codUsu,
-      inicioTimestamp: inicioTimestamp // Armazenar timestamp para cálculo posterior
-    };
-
-  } catch (error) {
-    console.error('Error starting separation:', error);
-    throw error;
-  }
-};
-
-export const buscarNunotaGeradaPelaOperacao = async (idiproc: number): Promise<number | null> => {
-  try {
-    const sql = `
-      SELECT DISTINCT
-        CAB.NUNOTA
-      FROM TGFCAB CAB 
-      JOIN TGFITE ITE 
-        ON ITE.NUNOTA = CAB.NUNOTA
-      JOIN AD_ALMOXARIFEWMS AD 
-        ON AD.OP = CAB.IDIPROC
-        AND AD.CODPROD = ITE.CODPROD
-      WHERE CAB.IDIPROC = ${idiproc} AND AD.QTDSEPARADA IS NOT NULL;
-    `;
-    
-    const result = await queryJson('DbExplorerSP.executeQuery', { sql });
-    
-    if (result.rows && result.rows.length > 0) {
-      const nunota = parseInt(result.rows[0][0]);
-      console.log('✅ NUNOTA encontrada:', nunota);
-      return nunota;
-    }
-    
-    console.log('⚠️ Nenhuma NUNOTA encontrada para a operação');
-    return null;
-  } catch (error) {
-    console.error('❌ Erro ao buscar NUNOTA:', error);
-    return null;
-  }
-};
-
-export const finalizarAtividadeEmbalagemComSession = async (data: {
-  IDIPROC: number;
-  IDEFX: number;
-  IDIATV: number;
-  IDPROC: number;
-  jsessionid: string;
-}): Promise<any> => {
-  try {
-    // FORMATO EXATO QUE FUNCIONA
-    const requestBody = {
-      serviceName: "OperacaoProducaoSP.finalizarInstanciaAtividades",
-      requestBody: {
-        instancias: {
-          confirmarApontamentosDivergentes: true,
-          instancia: [
-            {
-              IDIATV: { "$": data.IDIATV },
-              IDEFX: { "$": data.IDEFX },
-              IDIPROC: { "$": data.IDIPROC },
-              IDPROC: { "$": data.IDPROC }
-            }
-          ]
-        },
-        clientEventList: {
-          clientEvent: [
-            { "$": "br.com.sankhya.mgeprod.apontamentos.divergentes" },
-            { "$": "br.com.sankhya.mgeProd.wc.indisponivel" },
-            { "$": "br.com.sankhya.mgeprod.redimensionar.op.pa.perda" },
-            { "$": "br.com.sankhya.mgeprod.redimensionar.op.pa.avisos" },
-            { "$": "br.com.sankhya.mgeprod.trocaturno.avisos" },
-            { "$": "br.com.sankhya.mgeprod.finalizar.liberacao.desvio.pa" },
-            { "$": "br.com.sankhya.actionbutton.clientconfirm" },
-            { "$": "br.com.sankhya.mgeProd.apontamento.ultimo" },
-            { "$": "br.com.sankhya.mgeprod.operacaoproducao.mpalt.proporcao.apontamento.invalida" },
-            { "$": "br.com.sankhya.mgeProd.apontamento.liberaNroSerie" },
-            { "$": "br.com.sankhya.prod.remove.apontamento.pesagemvolume" },
-            { "$": "br.com.sankhya.mgeprod.confirma.ultimo.apontamento.mp.fixo" },
-            { "$": "br.com.sankhya.apontamentomp.naoreproporcionalizado" }
-          ]
-        }
-      }
-    };
-
-    // Criar instância específica para mgeprod
-    const mgeprodBaseURL = currentBaseURL.replace('/mge/', '/mgeprod/');
-    
-    // USAR AXIOS DIRECTAMENTE SEM INSTÂNCIA PARA EVITAR INTERCEPTORS
-    const url = `${mgeprodBaseURL}service.sbr?serviceName=OperacaoProducaoSP.finalizarInstanciaAtividades&application=OperacaoProducao&outputType=json&preventTransform=false&mgeSession=${data.jsessionid}`;
-    
-    console.log('🔵 Enviando requisição para finalizar atividade...');
-    console.log('🔵 URL completa:', url);
-
-    // USAR AXIOS DIRECTAMENTE COM CONFIGURAÇÃO SIMPLES
-    const response = await axios.post(url, requestBody, {
-      headers: { 
-        'Content-Type': 'application/json',
-        'Accept': 'application/json',
-        'Cookie': `JSESSIONID=${data.jsessionid}`
-      },
-      timeout: 30000,
-      transformResponse: []
-    });
-
-    console.log('🔵 Resposta bruta do servidor:', response.data);
-
-    // MANUALMENTE PROCESSAR A RESPOSTA
-    let responseData;
-    try {
-      // Tentar parsear como JSON
-      responseData = typeof response.data === 'string' 
-        ? JSON.parse(response.data) 
-        : response.data;
-    } catch (parseError) {
-      console.log('🔵 Resposta não é JSON válido, tratando como texto:', response.data);
-      // Se não for JSON, verificar se contém indicadores de sucesso
-      if (response.data && response.data.includes('status') && response.data.includes('"1"')) {
-        responseData = { status: "1", success: true };
-      } else {
-        throw new Error('Resposta do servidor em formato inválido');
-      }
-    }
-
-    console.log('🔵 Resposta parseada:', responseData);
-
-    // VERIFICAR SE FOI BEM-SUCEDIDO
-    if (responseData && responseData.status === "1") {
-      console.log('✅ Atividade finalizada com sucesso!');
-      
-      // ⭐⭐ AGUARDAR PARA A NOTA SER GERADA E PROCESSADA ⭐⭐
-      console.log('⏳ Aguardando processamento da nota...');
-      await new Promise(resolve => setTimeout(resolve, 5000));
-      
-      // ⭐⭐ BUSCAR A NUNOTA USANDO SEU SCRIPT CORRETO ⭐⭐
-      console.log('🔄 Buscando NUNOTA gerada pela operação...');
-      const nunota = await buscarNunotaGeradaPelaOperacao(data.IDIPROC);
-      
-      if (!nunota) {
-        console.log('⚠️ NUNOTA não encontrada após finalização da operação');
-        responseData.atualizacaoNota = {
-          success: false,
-          message: 'NUNOTA não gerada após finalização da operação'
-        };
-        return responseData;
-      }
-
-      console.log('📋 NUNOTA encontrada:', nunota);
-      
-      // ⭐⭐ BUSCAR AS QUANTIDADES SEPARADAS ⭐⭐
-      console.log('🔄 Buscando quantidades separadas...');
-      const quantidadesSeparadas = await buscarQuantidadesSeparadas(data.IDIPROC);
-      
-      if (quantidadesSeparadas.length === 0) {
-        console.log('⚠️ Nenhuma quantidade separada encontrada');
-        responseData.atualizacaoNota = {
-          success: true,
-          message: 'Nenhuma quantidade separada para atualizar'
-        };
-        return responseData;
-      }
-
-      console.log('📦 Quantidades separadas encontradas:', quantidadesSeparadas);
-      
-      // ⭐⭐ AGUARDAR MAIS UM POUCO PARA GARANTIR ⭐⭐
-      await new Promise(resolve => setTimeout(resolve, 2000));
-      
-      // ⭐⭐ ATUALIZAR AS QUANTIDADES NA NOTA ⭐⭐
-      console.log('🔄 Atualizando quantidades na nota...');
-      const resultadoAtualizacao = await atualizarQuantidadesNota(nunota, quantidadesSeparadas);
-      
-      console.log('✅ Quantidades atualizadas com sucesso:', resultadoAtualizacao);
-      responseData.atualizacaoNota = resultadoAtualizacao;
-      
-      return responseData;
-    }
-
-    // SE STATUS NÃO FOR 1, LANÇAR ERRO
-    throw new Error(responseData.statusMessage || 'Erro ao finalizar atividade');
-
-  } catch (error: any) {
-    // console.error('❌ Error na finalização:', error);
-    
-    // VERIFICAR SE A RESPOSTA VEIO NO ERROR (COMUM NO AXIOS)
-    if (error.response && error.response.data) {
-      console.log('🔵 Resposta veio no error.response:', error.response.data);
-      
-      try {
-        const errorData = typeof error.response.data === 'string' 
-          ? JSON.parse(error.response.data) 
-          : error.response.data;
-        
-        if (errorData.status === "1") {
-          console.log('✅ Atividade finalizada com sucesso (resposta no error)!');
-          
-          // ⭐⭐ TENTAR ATUALIZAR QUANTIDADES MESMO COM ERRO NO AXIOS ⭐⭐
-          try {
-            console.log('🔄 Buscando NUNOTA gerada pela operação (from error)...');
-            const nunota = await buscarNunotaGeradaPelaOperacao(data.IDIPROC);
-            
-            if (nunota) {
-              console.log('📋 NUNOTA encontrada (from error):', nunota);
-              
-              const quantidadesSeparadas = await buscarQuantidadesSeparadas(data.IDIPROC);
-              
-              if (quantidadesSeparadas.length > 0) {
-                await new Promise(resolve => setTimeout(resolve, 2000));
-                
-                const resultadoAtualizacao = await atualizarQuantidadesNota(nunota, quantidadesSeparadas);
-                console.log('✅ Quantidades atualizadas (from error):', resultadoAtualizacao);
-                
-                errorData.atualizacaoNota = resultadoAtualizacao;
-              } else {
-                errorData.atualizacaoNota = {
-                  success: true,
-                  message: 'Nenhuma quantidade separada para atualizar'
-                };
-              }
-            } else {
-              errorData.atualizacaoNota = {
-                success: false,
-                message: 'NUNOTA não encontrada para atualização'
-              };
-            }
-          } catch (updateError: any) {
-            console.error('❌ Erro ao processar quantidades (from error):', updateError);
-            errorData.atualizacaoNota = { 
-              success: false, 
-              error: updateError.message,
-              message: 'Falha no processamento das quantidades separadas' 
-            };
-          }
-          
-          return errorData;
-        }
-      } catch (parseError) {
-        console.log('❌ Não foi possível parsear error.response');
-      }
-    }
-    
-    // SE É NETWORK ERROR, VERIFICAR SE REALMENTE FALHOU
-    if (error.code === 'ERR_NETWORK' || error.message.includes('Network')) {
-      console.log('🌐 Network error detectado, verificando se atividade foi finalizada...');
-      
-      try {
-        const verification = await verificarAtividadeFinalizada(data.IDIATV);
-        if (verification.finalizada) {
-          console.log('✅ Atividade finalizada apesar do network error!');
-          
-          try {
-            console.log('🔄 Buscando NUNOTA gerada pela operação (network error)...');
-            const nunota = await buscarNunotaGeradaPelaOperacao(data.IDIPROC);
-            
-            if (nunota) {
-              const quantidadesSeparadas = await buscarQuantidadesSeparadas(data.IDIPROC);
-              
-              if (quantidadesSeparadas.length > 0) {
-                await new Promise(resolve => setTimeout(resolve, 2000));
-                
-                const resultadoAtualizacao = await atualizarQuantidadesNota(nunota, quantidadesSeparadas);
-                
-                return { 
-                  status: "1", 
-                  success: true, 
-                  message: 'Atividade finalizada (network error ignorado)',
-                  atualizacaoNota: resultadoAtualizacao
-                };
-              }
-            }
-            
-            return { 
-              status: "1", 
-              success: true, 
-              message: 'Atividade finalizada (network error ignorado)',
-              atualizacaoNota: {
-                success: nunota ? buscarQuantidadesSeparadas.length === 0 : false,
-                message: nunota 
-                  ? 'Nenhuma quantidade separada para atualizar' 
-                  : 'NUNOTA não encontrada para atualização'
-              }
-            };
-          } catch (processError) {
-            console.log('❌ Não foi possível processar quantidades:', processError);
-          }
-        }
-      } catch (verifyError) {
-        console.log('❌ Falha na verificação:', verifyError);
-      }
-    }
-    
-    throw new Error(
-      error.message.includes('Network Error') 
-        ? 'Erro de comunicação. Verifique sua conexão.'
-        : error.message
-    );
-  }
-};
-// Função auxiliar para verificar quantidades atualizadas
-export const verificarQuantidadesAtualizadas = async (nunota: number): Promise<void> => {
-  try {
-    const sql = `
-      SELECT 
-        I.CODPROD,
-        P.DESCRPROD,
-        I.SEQUENCIA, 
-        I.QTDNEG as QTD_ATUAL,
-        (SELECT AD.QTDSEPARADA FROM AD_ALMOXARIFEWMS AD 
-         WHERE AD.OP = (SELECT CAB.IDIPROC FROM TGFCAB CAB WHERE CAB.NUNOTA = I.NUNOTA)
-         AND AD.CODPROD = I.CODPROD) as QTD_SEPARADA
-      FROM TGFITE I
-      JOIN TGFPRO P ON P.CODPROD = I.CODPROD
-      WHERE I.NUNOTA = ${nunota}
-      ORDER BY I.SEQUENCIA
-    `;
-    
-    const result = await queryJson('DbExplorerSP.executeQuery', { sql });
-    
-    if (result.rows && result.rows.length > 0) {
-      console.log('📋 VERIFICAÇÃO - Quantidades atuais na nota:', nunota);
-      result.rows.forEach((row: any[]) => {
-        console.log(`   Produto: ${row[0]} - ${row[1]}, Seq: ${row[2]}, Qtd: ${row[3]}, Separada: ${row[4]}`);
-      });
-    } else {
-      console.log('📋 Nenhum item encontrado na nota para verificação:', nunota);
-    }
-  } catch (error) {
-    console.error('❌ Erro ao verificar quantidades:', error);
-  }
-};
-
-const verificarAtividadeFinalizada = async (idiAtv: number): Promise<{ finalizada: boolean }> => {
-  try {
-    const sql = `
-      SELECT DHFIM, STATUS 
-      FROM TPRIATV 
-      WHERE IDIATV = ${idiAtv}
-    `;
-    
-    const result = await queryJson('DbExplorerSP.executeQuery', { sql });
-    
-    if (result.rows.length > 0) {
-      const dhFim = result.rows[0][0]; // Data/hora de fim
-      const status = result.rows[0][1]; // Status
-      
-      return { 
-        finalizada: dhFim !== null && dhFim !== undefined 
-      };
-    }
-    
-    return { finalizada: false };
-  } catch (error) {
-    console.error('Erro ao verificar atividade:', error);
-    return { finalizada: false };
-  }
-};
-// Adicione estas funções no arquivo services/api.ts
-export const atualizarStatusSeparacao = async (codProd: number, status: number, usuario: string, op: number): Promise<any> => {
-  const requestBody = {
-    serviceName: "CRUDServiceProvider.saveRecord",
-    requestBody: {
-      dataSet: {
-        rootEntity: "AD_ALMOXARIFEWMS",
-        includePresentationFields: "N",
-        dataRow: {
-          localFields: {
-            CODPROD: { "$": codProd },
-            STATUS: { "$": status },
-            USUARIO: { "$": usuario },
-            OP: { "$": op }
-
-          }
-        },
-        entity: {
-          fieldset: {
-            list: "CODIGO, CODPROD, STATUS, USUARIO"
-          }
-        }
-      }
-    }
-  };
-
-  console.log('Request body para status 1:', JSON.stringify(requestBody, null, 2));
-
-  try {
-    const response = await api.post(
-      'mge/service.sbr?serviceName=CRUDServiceProvider.saveRecord&outputType=json',
-      requestBody,
-      { headers: { 'Content-Type': 'application/json' } }
-    );
-
-    console.log('Resposta status 1:', JSON.stringify(response.data, null, 2));
-
-    if (response.data.status !== "1") {
-      throw new Error(response.data.statusMessage || 'Erro ao atualizar status');
-    }
-
-    return response.data;
-  } catch (error) {
-    console.error('Error updating status:', error);
-    throw error;
-  }
-};
-
-export const finalizarSeparacaoCompleta = async (data: {
-    CODIGO: number;
-    CODPROD: number;
-    STATUS: string;
-    DESCRPROD: string;
-    ESTOQUE: string;
-    QTDSEPARADA: string;
-    USUARIO: string;
-    UNIDADE: string;
-    OP: number;
-    LOTE: string;
-  }
-): Promise<any> => {
-  const requestBody = {
-    serviceName: "CRUDServiceProvider.saveRecord",
-    requestBody: {
-      dataSet: {
-        rootEntity: "AD_ALMOXARIFEWMS",
-        includePresentationFields: "N",
-        dataRow: {
-          localFields: {
-            CODPROD: { "$": data.CODPROD },
-            DESCRPROD: { "$": data.DESCRPROD },
-            STATUS: { "$": "2" }, // Status 2 para finalizado
-            ESTOQUE: { "$": data.ESTOQUE }, // Agora será a quantidade da OP
-            QTDSEPARADA: { "$": data.QTDSEPARADA },
-            USUARIO: { "$": data.USUARIO },
-            UNIDADE: { "$": data.UNIDADE },
-            LOTE: { "$": data.LOTE },
-            OP: { "$": data.OP }
-          }
-        },  
-        key: {
-          CODIGO: { "$": data.CODIGO } // Forçar inserção de novo registro
-        },
-        entity: {
-          fieldset: {
-            list: "CODPROD,DESCRPROD,ESTOQUE,QTDSEPARADA,USUARIO,OP,UNIDADE"
-          }
-        }
-      }
-    }
-  };
-
-  try {
-    const response = await api.post(
-      'mge/service.sbr?serviceName=CRUDServiceProvider.saveRecord&outputType=json',
-      requestBody,
-      { headers: { 'Content-Type': 'application/json' } }
-    );
-
-    if (response.data.status !== "1") {
-      throw new Error(response.data.statusMessage || 'Erro ao registrar retirada');
-    }
-
-    return response.data.responseBody;
-  } catch (error) {
-    console.error('Error registering withdrawal:', error);
-    throw error;
-  }
-};
-
-// CORREÇÃO: Função para salvar/atualizar lote com key
+// Função para salvar lote (usa Sandbox)
 export const salvarLoteAPI = async (
   nunota: number,
   codprod: number,
@@ -1328,71 +604,45 @@ export const salvarLoteAPI = async (
   try {
     console.log('🔄 Iniciando salvamento do lote:', { nunota, codprod, lote });
 
-    // Primeiro, verificar e criar/atualizar o vínculo na AD_LOTESALMOX
-    const sqlVerificacaoLote = `
-      SELECT NUNOTA FROM AD_LOTESALMOX WHERE NUNOTA = ${nunota}
-    `;
+    // Verificar se já existe lote para esta nota
+    const sqlVerificacaoLote = `SELECT NUNOTA FROM AD_LOTESALMOX WHERE NUNOTA = ${nunota}`;
     
     let existeLote = false;
     try {
-      const resultVerificacao = await queryJson('DbExplorerSP.executeQuery', { sql: sqlVerificacaoLote });
+      const resultVerificacao = await executeQuery(sqlVerificacaoLote);
       existeLote = resultVerificacao.rows.length > 0;
       console.log('📋 Verificação de registro em AD_LOTESALMOX:', existeLote);
     } catch (error) {
       console.log('ℹ️ Não foi possível verificar registro em AD_LOTESALMOX');
     }
 
-    // 1. Criar/Atualizar vínculo na AD_LOTESALMOX
+    // Salvar/Atualizar AD_LOTESALMOX
     const requestBodyLoteSalmax = {
-      serviceName: "CRUDServiceProvider.saveRecord",
-      requestBody: {
-        dataSet: {
-          rootEntity: "AD_LOTESALMOX",
-          includePresentationFields: "N",
-          dataRow: {
-            localFields: {
-              NUNOTA: { "$": nunota },
-            },
-            ...(existeLote && {
-              key: {
-                NUNOTA: { "$": nunota }
-              }
-            })
+      dataSet: {
+        rootEntity: "AD_LOTESALMOX",
+        includePresentationFields: "N",
+        dataRow: {
+          localFields: {
+            NUNOTA: { "$": nunota },
           },
-          entity: {
-            fieldset: {
-              list: "NUNOTA"
+          ...(existeLote && {
+            key: {
+              NUNOTA: { "$": nunota }
             }
+          })
+        },
+        entity: {
+          fieldset: {
+            list: "NUNOTA"
           }
         }
       }
     };
 
-    console.log('📤 Enviando requisição para AD_LOTESALMOX:', JSON.stringify(requestBodyLoteSalmax, null, 2));
-
-    const responseLoteSalmax = await api.post(
-      'mge/service.sbr?serviceName=CRUDServiceProvider.saveRecord&outputType=json',
-      requestBodyLoteSalmax,
-      { 
-        headers: { 
-          'Content-Type': 'application/json',
-          'Accept': 'application/json'
-        } 
-      }
-    );
-
-    console.log('📥 Resposta AD_LOTESALMOX:', JSON.stringify(responseLoteSalmax.data, null, 2));
-
-    if (responseLoteSalmax.data.status !== "1") {
-      const errorMsg = responseLoteSalmax.data.statusMessage || 'Erro ao salvar vínculo da nota';
-      console.error('❌ Erro na AD_LOTESALMOX:', errorMsg);
-      throw new Error(errorMsg);
-    }
-
+    await queryJson('CRUDServiceProvider.saveRecord', requestBodyLoteSalmax);
     console.log('✅ Vínculo da nota salvo/atualizado com sucesso');
 
-    // 2. Agora salvar/atualizar o produto e lote na AD_LOTESPROD
-    // Primeiro precisamos verificar se já existe e obter o CODIGO se existir
+    // Verificar se já existe produto vinculado
     const sqlVerificacaoProd = `
       SELECT CODIGO, NUNOTA, CODPROD FROM AD_LOTESPROD 
       WHERE NUNOTA = ${nunota} AND CODPROD = ${codprod}
@@ -1402,79 +652,54 @@ export const salvarLoteAPI = async (
     let existeProduto = false;
     
     try {
-      const resultVerificacaoProd = await queryJson('DbExplorerSP.executeQuery', { sql: sqlVerificacaoProd });
+      const resultVerificacaoProd = await executeQuery(sqlVerificacaoProd);
       existeProduto = resultVerificacaoProd.rows.length > 0;
       
       if (existeProduto) {
-        codigoExistente = resultVerificacaoProd.rows[0][0]; // CODIGO é a primeira coluna
+        codigoExistente = resultVerificacaoProd.rows[0][0];
         console.log('📋 Registro existente em AD_LOTESPROD, CODIGO:', codigoExistente);
-      } else {
-        console.log('📋 Nenhum registro existente em AD_LOTESPROD');
       }
     } catch (error) {
       console.log('ℹ️ Não foi possível verificar registro em AD_LOTESPROD');
     }
 
-    // Montar o requestBody para AD_LOTESPROD
+    // Salvar/Atualizar AD_LOTESPROD
     const requestBodyLoteProd = {
-      serviceName: "CRUDServiceProvider.saveRecord",
-      requestBody: {
-        dataSet: {
-          rootEntity: "AD_LOTESPROD",
-          includePresentationFields: "N",
-          dataRow: {
-            localFields: {
-              NUNOTA: { "$": nunota },
-              CODPROD: { "$": codprod },
-              LOTE: { "$": lote.trim() },
-              DATAVAL: { "$": dataValidade }
-            },
-            // Incluir key apenas se já existir registro (para UPDATE)
-            ...(existeProduto && codigoExistente && {
-              key: {
-                CODIGO: { "$": codigoExistente }
-              }
-            })
+      dataSet: {
+        rootEntity: "AD_LOTESPROD",
+        includePresentationFields: "N",
+        dataRow: {
+          localFields: {
+            NUNOTA: { "$": nunota },
+            CODPROD: { "$": codprod },
+            LOTE: { "$": lote.trim() },
+            DATAVAL: { "$": dataValidade }
           },
-          entity: {
-            fieldset: {
-              list: "NUNOTA, CODPROD, LOTE"
+          ...(existeProduto && codigoExistente && {
+            key: {
+              CODIGO: { "$": codigoExistente }
             }
+          })
+        },
+        entity: {
+          fieldset: {
+            list: "NUNOTA, CODPROD, LOTE"
           }
         }
       }
     };
 
-    console.log('📤 Enviando requisição para AD_LOTESPROD:', JSON.stringify(requestBodyLoteProd, null, 2));
-
-    const responseLoteProd = await api.post(
-      'mge/service.sbr?serviceName=CRUDServiceProvider.saveRecord&outputType=json',
-      requestBodyLoteProd,
-      { 
-        headers: { 
-          'Content-Type': 'application/json',
-          'Accept': 'application/json'
-        } 
-      }
-    );
-
-    console.log('📥 Resposta AD_LOTESPROD:', JSON.stringify(responseLoteProd.data, null, 2));
-
-    if (responseLoteProd.data.status === "1") {
-      console.log('✅ Lote do produto salvo/atualizado com sucesso');
-      return {
-        success: true,
-        nunota: nunota,
-        codprod: codprod,
-        lote: lote,
-        operacao: existeProduto ? 'atualizado' : 'criado',
-        message: existeProduto ? 'Lote atualizado com sucesso!' : 'Lote vinculado com sucesso!'
-      };
-    } else {
-      const errorMsg = responseLoteProd.data.statusMessage || 'Erro ao salvar lote do produto';
-      console.error('❌ Erro na AD_LOTESPROD:', errorMsg);
-      throw new Error(errorMsg);
-    }
+    await queryJson('CRUDServiceProvider.saveRecord', requestBodyLoteProd);
+    
+    console.log('✅ Lote do produto salvo/atualizado com sucesso');
+    return {
+      success: true,
+      nunota: nunota,
+      codprod: codprod,
+      lote: lote,
+      operacao: existeProduto ? 'atualizado' : 'criado',
+      message: existeProduto ? 'Lote atualizado com sucesso!' : 'Lote vinculado com sucesso!'
+    };
 
   } catch (error: any) {
     console.error('❌ Erro completo ao salvar lote:', error);
@@ -1483,10 +708,8 @@ export const salvarLoteAPI = async (
     
     if (error.response) {
       errorMessage = `Erro ${error.response.status}: ${error.response.data?.statusMessage || 'Erro desconhecido'}`;
-      console.error('❌ Detalhes do erro:', error.response.data);
     } else if (error.request) {
       errorMessage = 'Erro de conexão com o servidor';
-      console.error('❌ Erro de rede:', error.request);
     } else if (error.message) {
       errorMessage = error.message;
     }
@@ -1495,6 +718,7 @@ export const salvarLoteAPI = async (
   }
 };
 
+// Função query para XML (usa Sandbox)
 export const query = async (serviceName: string, requestBody: string): Promise<any> => {
   const xmlRequest = `<?xml version="1.0" encoding="ISO-8859-1"?>
 <serviceRequest serviceName="${escapeXml(serviceName)}">
@@ -1504,10 +728,18 @@ export const query = async (serviceName: string, requestBody: string): Promise<a
 </serviceRequest>`;
 
   try {
-    const response = await api.post(
-      `services.sbr?serviceName=${encodeURIComponent(serviceName)}`,
+    const bearerToken = await authService.getBearerToken();
+    const response = await queryApi.post(
+      `service.sbr?serviceName=${encodeURIComponent(serviceName)}&outputType=xml`,
       xmlRequest,
-      { responseType: 'text', transformResponse: [data => data] }
+      { 
+        responseType: 'text', 
+        transformResponse: [data => data],
+        headers: {
+          'Content-Type': 'application/xml',
+          'Authorization': `Bearer ${bearerToken}`
+        }
+      }
     );
 
     const result = parser.parse(response.data);
@@ -1531,8 +763,10 @@ export const query = async (serviceName: string, requestBody: string): Promise<a
     );
   }
 };
+
 // XML escape helper
 function escapeXml(unsafe: string): string {
+  if (!unsafe) return '';
   return unsafe.replace(/[<>&'"]/g, (c) => {
     switch (c) {
       case '<': return '&lt;';
@@ -1550,4 +784,4 @@ initializeAPI().catch(error => {
   console.error('Failed to initialize API:', error);
 });
 
-export default api;
+export default { loginApi, queryApi };
