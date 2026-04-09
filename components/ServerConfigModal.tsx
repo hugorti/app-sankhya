@@ -3,9 +3,10 @@ import { useState, useEffect } from 'react';
 import { View, Text, TextInput, StyleSheet, Modal, TouchableOpacity, Alert, ActivityIndicator } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { MaterialIcons } from '@expo/vector-icons';
-import { setBaseURL } from '../services/api';
+import { setBaseURL, setEnvironment, getCurrentEnvironment, ENVIRONMENTS, EnvironmentType } from '../services/api';
 
 const SERVER_URL_KEY = 'saved_server_url';
+const ENVIRONMENT_KEY = 'selected_environment';
 
 export default function ServerConfigModal({ visible, onClose, onSave }: {
   visible: boolean;
@@ -16,37 +17,82 @@ export default function ServerConfigModal({ visible, onClose, onSave }: {
   const [port, setPort] = useState('8180');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const [selectedEnvironment, setSelectedEnvironment] = useState<EnvironmentType>('TEST');
+  const [changingEnvironment, setChangingEnvironment] = useState(false);
 
   useEffect(() => {
-    const loadSavedServer = async () => {
+    const loadSavedConfig = async () => {
       try {
         const saved = await AsyncStorage.getItem(SERVER_URL_KEY);
         if (saved) {
-          // Handle both formats: "ip:port" and full URL
           const cleanValue = saved.replace(/^https?:\/\//, '').replace(/\/mge\/?$/, '');
           const [savedIp, savedPort] = cleanValue.split(':');
           setIp(savedIp || '');
           setPort(savedPort || '8180');
         }
+        
+        const currentEnv = await getCurrentEnvironment();
+        setSelectedEnvironment(currentEnv);
+        
       } catch (error) {
-        console.error('Error loading saved server:', error);
+        console.error('Error loading saved config:', error);
       }
     };
     
     if (visible) {
-      loadSavedServer();
+      loadSavedConfig();
       setError('');
     }
   }, [visible]);
 
+  const handleEnvironmentSelect = async (environment: EnvironmentType) => {
+    setChangingEnvironment(true);
+    setError('');
+    
+    try {
+      // Mudar o ambiente
+      await setEnvironment(environment);
+      setSelectedEnvironment(environment);
+      
+      // Preencher IP e Porta automaticamente baseado no ambiente
+      if (environment === 'PRODUCTION') {
+        setIp('179.127.28.188');
+        setPort('55180');
+      } else {
+        setIp('192.168.0.106');
+        setPort('8280');
+      }
+      
+      const config = ENVIRONMENTS[environment];
+      
+      Alert.alert(
+        'Ambiente Alterado',
+        `${config.name} selecionado!${environment === 'PRODUCTION' ? '\n\nIP e Porta são fixos e não podem ser alterados.' : ''}`,
+        [{ text: 'OK', style: 'default' }]
+      );
+      
+    } catch (error) {
+      console.error('Erro ao mudar ambiente:', error);
+      Alert.alert('Erro', 'Não foi possível alterar o ambiente.');
+    } finally {
+      setChangingEnvironment(false);
+    }
+  };
+
   const handleSave = async () => {
+    // Se for produção, não permite salvar (já está configurado)
+    if (selectedEnvironment === 'PRODUCTION') {
+      Alert.alert('Aviso', 'O ambiente de Produção já está configurado com IP e Porta fixos.');
+      return;
+    }
+
     if (!ip.trim()) {
-      setError('Por favor, informe o endereço do servidor');
+      setError('Informe o endereço do servidor');
       return;
     }
 
     if (!/^(\d{1,3}\.){3}\d{1,3}$/.test(ip) && !/^[a-zA-Z0-9\-\.]+$/.test(ip)) {
-      setError('Endereço IP ou domínio inválido');
+      setError('IP ou domínio inválido');
       return;
     }
 
@@ -65,14 +111,17 @@ export default function ServerConfigModal({ visible, onClose, onSave }: {
       if (success) {
         onSave(fullUrl);
         onClose();
-        Alert.alert('Sucesso', 'Configuração do servidor salva com sucesso!');
+        Alert.alert('Sucesso', 'Configuração salva!');
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Erro ao salvar configuração');
+      setError(err instanceof Error ? err.message : 'Erro ao salvar');
     } finally {
       setLoading(false);
     }
   };
+
+  // Verifica se os inputs devem estar desabilitados (apenas produção desabilita)
+  const isInputDisabled = selectedEnvironment === 'PRODUCTION' || loading;
 
   return (
     <Modal
@@ -84,8 +133,8 @@ export default function ServerConfigModal({ visible, onClose, onSave }: {
       <View style={styles.modalOverlay}>
         <View style={styles.modalContainer}>
           <View style={styles.modalHeader}>
-            <Text style={styles.modalTitle}>Configuração do Servidor</Text>
-            <TouchableOpacity onPress={onClose} disabled={loading}>
+            <Text style={styles.modalTitle}>Configurações</Text>
+            <TouchableOpacity onPress={onClose} disabled={loading || changingEnvironment}>
               <MaterialIcons name="close" size={24} color="#6a1b9a" />
             </TouchableOpacity>
           </View>
@@ -96,47 +145,121 @@ export default function ServerConfigModal({ visible, onClose, onSave }: {
             </View>
           ) : null}
 
-          <View style={styles.inputGroup}>
-            <Text style={styles.label}>Endereço IP/Domínio:</Text>
-            <TextInput
-              style={styles.input}
-              placeholder="Ex: 192.168.1.100"
-              value={ip}
-              onChangeText={setIp}
-              keyboardType="default"
-              autoCapitalize="none"
-              autoCorrect={false}
-              editable={!loading}
-            />
+          {/* Cards de Ambiente */}
+          <View style={styles.environmentContainer}>
+            <TouchableOpacity
+              style={[
+                styles.environmentCard,
+                selectedEnvironment === 'TEST' && styles.environmentCardSelectedTest,
+              ]}
+              onPress={() => handleEnvironmentSelect('TEST')}
+              disabled={changingEnvironment}
+            >
+              <MaterialIcons 
+                name="science" 
+                size={28} 
+                color={selectedEnvironment === 'TEST' ? '#4caf50' : '#999'} 
+              />
+              <Text style={[
+                styles.environmentText,
+                selectedEnvironment === 'TEST' && styles.environmentTextSelected
+              ]}>
+                Teste
+              </Text>
+              {selectedEnvironment === 'TEST' && (
+                <MaterialIcons name="check-circle" size={20} color="#4caf50" style={styles.checkIcon} />
+              )}
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={[
+                styles.environmentCard,
+                selectedEnvironment === 'PRODUCTION' && styles.environmentCardSelectedProd,
+              ]}
+              onPress={() => handleEnvironmentSelect('PRODUCTION')}
+              disabled={changingEnvironment}
+            >
+              <MaterialIcons 
+                name="cloud-queue" 
+                size={28} 
+                color={selectedEnvironment === 'PRODUCTION' ? '#ff9800' : '#999'} 
+              />
+              <Text style={[
+                styles.environmentText,
+                selectedEnvironment === 'PRODUCTION' && styles.environmentTextSelected
+              ]}>
+                Produção
+              </Text>
+              {selectedEnvironment === 'PRODUCTION' && (
+                <MaterialIcons name="check-circle" size={20} color="#ff9800" style={styles.checkIcon} />
+              )}
+            </TouchableOpacity>
           </View>
 
-          <View style={styles.inputGroup}>
-            <Text style={styles.label}>Porta:</Text>
-            <TextInput
-              style={styles.input}
-              placeholder="Ex: 8180"
-              value={port}
-              onChangeText={setPort}
-              keyboardType="numeric"
-              editable={!loading}
-            />
-          </View>
+          {changingEnvironment && (
+            <View style={styles.changingContainer}>
+              <ActivityIndicator size="small" color="#6a1b9a" />
+            </View>
+          )}
 
-          <View style={styles.exampleContainer}>
-            <Text style={styles.exampleText}>Exemplos:</Text>
-            <Text style={styles.exampleItem}>• 45.186.217.65:8180</Text>
-            <Text style={styles.exampleItem}>• meuservidor.com.br:8080</Text>
+          {/* Configuração do Servidor */}
+          <View style={styles.serverSection}>
+            <Text style={styles.sectionLabel}>
+              Servidor Local
+              {selectedEnvironment === 'PRODUCTION' && (
+                <Text style={styles.fixedLabel}> (Fixos - Não editável)</Text>
+              )}
+            </Text>
+            
+            <View style={[styles.inputWrapper, isInputDisabled && styles.inputWrapperDisabled]}>
+              <MaterialIcons name="dns" size={20} color={isInputDisabled ? '#999' : '#6a1b9a'} />
+              <TextInput
+                style={[styles.input, isInputDisabled && styles.inputDisabled]}
+                placeholder="IP ou domínio"
+                placeholderTextColor={isInputDisabled ? '#ccc' : '#ce93d8'}
+                value={ip}
+                onChangeText={setIp}
+                editable={!isInputDisabled}
+              />
+            </View>
+
+            <View style={[styles.inputWrapper, isInputDisabled && styles.inputWrapperDisabled]}>
+              <MaterialIcons name="settings-ethernet" size={20} color={isInputDisabled ? '#999' : '#6a1b9a'} />
+              <TextInput
+                style={[styles.input, isInputDisabled && styles.inputDisabled]}
+                placeholder="Porta"
+                placeholderTextColor={isInputDisabled ? '#ccc' : '#ce93d8'}
+                value={port}
+                onChangeText={setPort}
+                keyboardType="numeric"
+                editable={!isInputDisabled}
+              />
+            </View>
+
+            {selectedEnvironment === 'PRODUCTION' && (
+              <View style={styles.infoBox}>
+                <MaterialIcons name="lock" size={16} color="#ff9800" />
+                <Text style={styles.infoText}>
+                  Ambiente de Produção - IP e Porta são fixos e não podem ser alterados
+                </Text>
+              </View>
+            )}
           </View>
 
           <TouchableOpacity 
-            style={[styles.saveButton, loading && styles.disabledButton]}
+            style={[
+              styles.saveButton, 
+              (loading || changingEnvironment || selectedEnvironment === 'PRODUCTION') && styles.disabledButton
+            ]}
             onPress={handleSave}
-            disabled={loading}
+            disabled={loading || changingEnvironment || selectedEnvironment === 'PRODUCTION'}
           >
             {loading ? (
               <ActivityIndicator color="#fff" size="small" />
             ) : (
-              <Text style={styles.saveButtonText}>SALVAR CONFIGURAÇÃO</Text>
+              <Text style={styles.saveButtonText}>
+                {selectedEnvironment === 'PRODUCTION' ? 'CONFIGURAÇÃO FIXA' : 'SALVAR'}
+              </Text>
             )}
           </TouchableOpacity>
         </View>
@@ -154,7 +277,7 @@ const styles = StyleSheet.create({
   },
   modalContainer: {
     backgroundColor: '#fff',
-    borderRadius: 12,
+    borderRadius: 16,
     padding: 20,
   },
   modalHeader: {
@@ -164,66 +287,127 @@ const styles = StyleSheet.create({
     marginBottom: 20,
   },
   modalTitle: {
-    fontSize: 18,
+    fontSize: 20,
     fontWeight: 'bold',
     color: '#6a1b9a',
   },
   errorContainer: {
     backgroundColor: '#ffebee',
     padding: 10,
-    borderRadius: 5,
+    borderRadius: 8,
     marginBottom: 15,
   },
   errorText: {
     color: '#c62828',
-    fontSize: 14,
+    fontSize: 13,
   },
-  inputGroup: {
+  environmentContainer: {
+    flexDirection: 'row',
+    gap: 12,
+    marginBottom: 20,
+  },
+  environmentCard: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#f5f5f5',
+    borderRadius: 10,
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    borderWidth: 1.5,
+    borderColor: 'transparent',
+    position: 'relative',
+  },
+  environmentCardSelectedTest: {
+    backgroundColor: '#e8f5e9',
+    borderColor: '#4caf50',
+  },
+  environmentCardSelectedProd: {
+    backgroundColor: '#fff3e0',
+    borderColor: '#ff9800',
+  },
+  environmentText: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#666',
+    marginLeft: 8,
+  },
+  environmentTextSelected: {
+    color: '#6a1b9a',
+  },
+  checkIcon: {
+    position: 'absolute',
+    right: 8,
+    top: 8,
+  },
+  changingContainer: {
+    alignItems: 'center',
     marginBottom: 15,
   },
-  label: {
-    fontSize: 14,
-    color: '#6a1b9a',
-    marginBottom: 5,
+  serverSection: {
+    marginBottom: 20,
   },
-  input: {
+  sectionLabel: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#6a1b9a',
+    marginBottom: 10,
+  },
+  fixedLabel: {
+    fontSize: 12,
+    fontWeight: 'normal',
+    color: '#ff9800',
+  },
+  inputWrapper: {
+    flexDirection: 'row',
+    alignItems: 'center',
     borderWidth: 1,
     borderColor: '#ce93d8',
     borderRadius: 8,
-    padding: 12,
-    fontSize: 16,
-    color: '#4a148c',
     backgroundColor: '#fff',
+    marginBottom: 10,
+    paddingHorizontal: 12,
   },
-  exampleContainer: {
-    marginTop: 10,
-    marginBottom: 20,
+  inputWrapperDisabled: {
+    backgroundColor: '#f5f5f5',
+    borderColor: '#ddd',
   },
-  exampleText: {
-    fontSize: 14,
-    color: '#9c27b0',
-    marginBottom: 5,
-    fontWeight: '500',
-  },
-  exampleItem: {
-    fontSize: 13,
+  input: {
+    flex: 1,
+    padding: 12,
+    fontSize: 15,
     color: '#4a148c',
-    marginLeft: 10,
+  },
+  inputDisabled: {
+    color: '#999',
+  },
+  infoBox: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#fff3e0',
+    padding: 10,
+    borderRadius: 8,
+    marginTop: 8,
+    gap: 8,
+  },
+  infoText: {
+    flex: 1,
+    fontSize: 12,
+    color: '#ff9800',
   },
   saveButton: {
     backgroundColor: '#4a148c',
-    borderRadius: 8,
-    padding: 15,
+    borderRadius: 10,
+    padding: 14,
     alignItems: 'center',
-    justifyContent: 'center',
-    minHeight: 50,
   },
   disabledButton: {
-    opacity: 0.7,
+    backgroundColor: '#ccc',
   },
   saveButtonText: {
     color: '#fff',
     fontWeight: 'bold',
-    fontSize: 16,
+    fontSize: 15,
   },
 });

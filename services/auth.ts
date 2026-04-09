@@ -1,5 +1,4 @@
-// services/auth.ts - COM NOVO X-TOKEN
-
+// services/auth.ts
 import axios from 'axios';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
@@ -12,15 +11,34 @@ interface TokenResponse {
   scope: string;
 }
 
+interface AuthCredentials {
+  AUTH_URL: string;
+  CLIENT_ID: string;
+  CLIENT_SECRET: string;
+  X_TOKEN: string;
+}
+
 export class AuthService {
   private static instance: AuthService;
   private tokenExpiration: number | null = null;
+  private currentCredentials: AuthCredentials = {
+    AUTH_URL: 'https://api.sandbox.sankhya.com.br/authenticate',
+    CLIENT_ID: '25a5c6d7-a3f1-4149-866b-f06b4d23cd00',
+    CLIENT_SECRET: '9aVXcCy6rtB0LMZb35rSQaDG1sMjkAI0',
+    X_TOKEN: '8ea22bfb-755a-4b1c-9779-c6e408e9219f',
+  };
 
   static getInstance(): AuthService {
     if (!AuthService.instance) {
       AuthService.instance = new AuthService();
     }
     return AuthService.instance;
+  }
+
+  async updateCredentials(credentials: AuthCredentials): Promise<void> {
+    console.log('🔄 Atualizando credenciais do AuthService');
+    this.currentCredentials = credentials;
+    await this.invalidateToken(); // Forçar novo token com novas credenciais
   }
 
   async getBearerToken(): Promise<string | null> {
@@ -52,37 +70,26 @@ export class AuthService {
   private async generateToken(): Promise<string | null> {
     try {
       console.log('🔐 Iniciando geração de token OAuth...');
+      console.log(`📍 URL: ${this.currentCredentials.AUTH_URL}`);
+      console.log(`🔑 Client ID: ${this.currentCredentials.CLIENT_ID}`);
       
-      // CREDENCIAIS CORRETAS (baseadas no curl que funciona)
-      const CLIENT_ID = '25a5c6d7-a3f1-4149-866b-f06b4d23cd00';
-      const CLIENT_SECRET = '9aVXcCy6rtB0LMZb35rSQaDG1sMjkAI0';
-      
-      // 🔄 SUBSTITUA ESTE VALOR PELO NOVO X-TOKEN GERADO NO SANKHYA OM
-      const X_TOKEN = '8ea22bfb-755a-4b1c-9779-c6e408e9219f'; // ← GERAR NOVO NO SANKHYA OM
-      
-      // Construir o body com URLSearchParams (igual ao curl)
+      // Construir o body com URLSearchParams
       const formData = new URLSearchParams();
       formData.append('grant_type', 'client_credentials');
-      formData.append('client_id', CLIENT_ID);
-      formData.append('client_secret', CLIENT_SECRET);
+      formData.append('client_id', this.currentCredentials.CLIENT_ID);
+      formData.append('client_secret', this.currentCredentials.CLIENT_SECRET);
       
-      // Headers exatamente como no curl
+      // Headers
       const headers = {
         'accept': 'application/x-www-form-urlencoded',
         'content-type': 'application/x-www-form-urlencoded',
-        'X-Token': X_TOKEN,
+        'X-Token': this.currentCredentials.X_TOKEN,
       };
       
-      console.log('📤 Enviando requisição para:', 'https://api.sandbox.sankhya.com.br/authenticate');
-      console.log('📋 Headers:', headers);
-      console.log('📋 Body (form-data):', {
-        grant_type: 'client_credentials',
-        client_id: CLIENT_ID,
-        client_secret: '***' // Ocultado por segurança
-      });
+      console.log('📤 Enviando requisição para autenticação...');
 
       const response = await axios.post<TokenResponse>(
-        'https://api.sandbox.sankhya.com.br/authenticate',
+        this.currentCredentials.AUTH_URL,
         formData.toString(),
         { headers }
       );
@@ -114,32 +121,24 @@ export class AuthService {
       if (axios.isAxiosError(error)) {
         if (error.response) {
           console.error('Status:', error.response.status);
-          console.error('Headers:', error.response.headers);
           console.error('Data:', error.response.data);
           
-          // Mensagens de erro mais específicas baseadas no status
           if (error.response.status === 401) {
             const errorData = error.response.data as any;
             
             if (errorData.error === 'invalid_client') {
-              throw new Error('Client ID ou Client Secret inválidos. Verifique as credenciais na Área do Desenvolvedor do Sankhya.');
+              throw new Error('Client ID ou Client Secret inválidos para este ambiente.');
             } else if (errorData.error === 'invalid_token') {
-              throw new Error('X-Token inválido. Verifique se o token está correto e foi gerado no Sankhya Om.');
-            } else if (errorData.error === 'invalid_grant') {
-              throw new Error('Grant type inválido. Verifique se "client_credentials" está habilitado para esta aplicação.');
+              throw new Error('X-Token inválido para este ambiente.');
             } else {
               throw new Error(`Erro de autenticação: ${errorData.error_description || 'Credenciais inválidas'}`);
             }
-          } else if (error.response.status === 403) {
-            throw new Error('Acesso negado. A aplicação não tem permissão para usar este fluxo de autenticação.');
-          } else if (error.response.status === 400) {
-            throw new Error(`Requisição inválida: ${JSON.stringify(error.response.data)}`);
           } else {
             throw new Error(`Erro ${error.response.status}: ${JSON.stringify(error.response.data)}`);
           }
         } else if (error.request) {
-          console.error('Sem resposta do servidor:', error.request);
-          throw new Error('Servidor de autenticação não respondeu. Verifique sua conexão com a internet.');
+          console.error('Sem resposta do servidor');
+          throw new Error('Servidor de autenticação não respondeu. Verifique sua conexão.');
         } else {
           console.error('Erro na configuração:', error.message);
           throw new Error(`Erro na requisição: ${error.message}`);

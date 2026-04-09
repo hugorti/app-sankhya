@@ -6,14 +6,57 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { AppState, AppStateStatus } from 'react-native';
 import { AuthService } from './auth';
 
+// ==================== CONFIGURAÇÕES DE AMBIENTE ====================
+export type EnvironmentType = 'TEST' | 'PRODUCTION';
+
+interface EnvironmentConfig {
+  name: string;
+  BASE_URL: string;
+  DEFAULT_IP: string;
+  DEFAULT_PORT: string;
+  AUTH_URL: string;
+  CLIENT_ID: string;
+  CLIENT_SECRET: string;
+  X_TOKEN: string;
+}
+
+export const ENVIRONMENTS: Record<EnvironmentType, EnvironmentConfig> = {
+  TEST: {
+    name: 'Ambiente Teste',
+    BASE_URL: 'https://api.sandbox.sankhya.com.br/gateway/v1/mge/',
+    DEFAULT_IP: '',
+    DEFAULT_PORT: '',
+    AUTH_URL: 'https://api.sandbox.sankhya.com.br/authenticate',
+    CLIENT_ID: '25a5c6d7-a3f1-4149-866b-f06b4d23cd00',
+    CLIENT_SECRET: '9aVXcCy6rtB0LMZb35rSQaDG1sMjkAI0',
+    X_TOKEN: '8ea22bfb-755a-4b1c-9779-c6e408e9219f',
+  },
+  PRODUCTION: {
+    name: 'Ambiente Produção',
+    BASE_URL: 'https://api.sankhya.com.br/gateway/v1/mge/', // Ajuste conforme necessário
+    DEFAULT_IP: '',
+    DEFAULT_PORT: '',
+    AUTH_URL: 'https://api.sankhya.com.br/authenticate', // Ajuste conforme necessário
+    CLIENT_ID: '3112542a-4a20-4e08-92a2-298649f74911',
+    CLIENT_SECRET: 'lvzGUmX7LOB5X60XVo22Sr9g2ph3GRS9',
+    X_TOKEN: 'fa55d0c2-c607-4ac8-8f4f-c4d4ff7576cf',
+  }
+};
+
+// Ambiente atual (será carregado do AsyncStorage)
+let currentEnvironment: EnvironmentType = 'TEST';
+
+// ==================== FIM DAS CONFIGURAÇÕES ====================
+
 const SERVER_URL_KEY = 'saved_server_url';
+const ENVIRONMENT_KEY = 'selected_environment';
 const DEFAULT_IP = '';
-const DEFAULT_PORT = '8180';
+const DEFAULT_PORT = '';
 const DEFAULT_URL = `${DEFAULT_IP}:${DEFAULT_PORT}`;
 const INACTIVITY_TIMEOUT = 5 * 60 * 1000;
 
-// Nova URL base para consultas (API Sandbox Sankhya)
-const SANDBOX_BASE_URL = 'https://api.sandbox.sankhya.com.br/gateway/v1/mge/';
+// URL base atual (será atualizada quando o ambiente mudar)
+let currentBaseURL = `http://${DEFAULT_URL}/mge/`;
 
 const parser = new XMLParser({
   attributeNamePrefix: '@_',
@@ -29,7 +72,6 @@ interface LoginResponse {
   transactionId: string;
 }
 
-let currentBaseURL = `http://${DEFAULT_URL}/mge/`;
 let inactivityTimer: number | null = null;
 let lastActivityTime: number | null = null;
 let onInactiveCallback: (() => Promise<void>) | null = null;
@@ -50,13 +92,86 @@ let loginApi: AxiosInstance = axios.create({
 
 // Criar instância do axios para consultas (nova rota Sandbox)
 let queryApi: AxiosInstance = axios.create({
-  baseURL: SANDBOX_BASE_URL,
+  baseURL: ENVIRONMENTS.TEST.BASE_URL,
   timeout: 30000,
   headers: {
     'Content-Type': 'application/json',
     'Accept': 'application/json'
   }
 });
+
+// ==================== FUNÇÕES DE GERENCIAMENTO DE AMBIENTE ====================
+
+// Obter configuração do ambiente atual
+export const getCurrentEnvironmentConfig = (): EnvironmentConfig => {
+  return ENVIRONMENTS[currentEnvironment];
+};
+
+// Obter ambiente atual
+export const getCurrentEnvironment = (): EnvironmentType => {
+  return currentEnvironment;
+};
+
+// Salvar ambiente selecionado
+export const setEnvironment = async (environment: EnvironmentType): Promise<void> => {
+  try {
+    currentEnvironment = environment;
+    await AsyncStorage.setItem(ENVIRONMENT_KEY, environment);
+    
+    // Atualizar a URL base da queryApi
+    const config = ENVIRONMENTS[environment];
+    queryApi.defaults.baseURL = config.BASE_URL;
+    
+    // Atualizar AuthService com novas credenciais
+    await updateAuthCredentials(config);
+    
+    console.log(`✅ Ambiente alterado para: ${config.name}`);
+    console.log(`📡 URL base: ${config.BASE_URL}`);
+  } catch (error) {
+    console.error('❌ Erro ao salvar ambiente:', error);
+    throw error;
+  }
+};
+
+// Carregar ambiente salvo
+export const loadSavedEnvironment = async (): Promise<EnvironmentType> => {
+  try {
+    const saved = await AsyncStorage.getItem(ENVIRONMENT_KEY);
+    if (saved === 'TEST' || saved === 'PRODUCTION') {
+      currentEnvironment = saved;
+      const config = ENVIRONMENTS[currentEnvironment];
+      queryApi.defaults.baseURL = config.BASE_URL;
+      await updateAuthCredentials(config);
+      console.log(`📌 Ambiente carregado: ${config.name}`);
+      return currentEnvironment;
+    }
+  } catch (error) {
+    console.error('❌ Erro ao carregar ambiente:', error);
+  }
+  return 'TEST'; // Padrão
+};
+
+// Atualizar credenciais do AuthService
+const updateAuthCredentials = async (config: EnvironmentConfig): Promise<void> => {
+  try {
+    // Atualizar as variáveis no AuthService (você precisará modificar o AuthService para aceitar isso)
+    await authService.updateCredentials({
+      AUTH_URL: config.AUTH_URL,
+      CLIENT_ID: config.CLIENT_ID,
+      CLIENT_SECRET: config.CLIENT_SECRET,
+      X_TOKEN: config.X_TOKEN
+    });
+    
+    // Invalidar token antigo para gerar novo com as novas credenciais
+    await authService.invalidateToken();
+    
+    console.log('🔐 Credenciais atualizadas para o novo ambiente');
+  } catch (error) {
+    console.error('❌ Erro ao atualizar credenciais:', error);
+  }
+};
+
+// ==================== FUNÇÕES EXISTENTES ====================
 
 // Funções para gerenciar inatividade
 export const setupInactivityListener = (callback: () => Promise<void>) => {
@@ -163,6 +278,9 @@ export const setBaseURL = async (ipPort: string): Promise<boolean> => {
 // Initialize API with saved URL
 export const initializeAPI = async (): Promise<void> => {
   try {
+    // Carregar ambiente salvo
+    await loadSavedEnvironment();
+    
     const saved = await AsyncStorage.getItem(SERVER_URL_KEY);
     if (saved) {
       const formattedUrl = formatServerUrl(saved);
@@ -451,7 +569,7 @@ export const logout = async (isAutoLogout = false): Promise<void> => {
   }
 };
 
-// 🔧 FUNÇÃO QUERYJSON CORRIGIDA - Formato correto para API Sankhya Sandbox
+// Função queryJson
 export const queryJson = async (serviceName: string, requestBody: any): Promise<any> => {
   try {
     const bearerToken = await authService.getBearerToken();
@@ -460,7 +578,6 @@ export const queryJson = async (serviceName: string, requestBody: any): Promise<
       throw new Error('Token de autenticação não encontrado');
     }
     
-    // 🔧 CORREÇÃO: Enviar no formato correto que a API espera
     const payload = {
       serviceName: serviceName,
       requestBody: requestBody
@@ -471,7 +588,7 @@ export const queryJson = async (serviceName: string, requestBody: any): Promise<
     
     const response = await queryApi.post(
       `service.sbr?serviceName=${encodeURIComponent(serviceName)}&outputType=json`,
-      payload,  // <- Agora enviando o objeto completo com serviceName e requestBody
+      payload,
       { 
         headers: { 
           'Content-Type': 'application/json',
@@ -482,7 +599,6 @@ export const queryJson = async (serviceName: string, requestBody: any): Promise<
 
     console.log('📥 Resposta recebida, status:', response.status);
     
-    // Verificar se a resposta tem a estrutura esperada
     if (response.data && response.data.status !== undefined) {
       if (response.data.status !== "1" && response.data.status !== 1) {
         const errorMsg = response.data.statusMessage || 'Erro na requisição';
@@ -508,7 +624,7 @@ export const queryJson = async (serviceName: string, requestBody: any): Promise<
   }
 };
 
-// Função para executar query SQL via DbExplorerSP
+// Função para executar query SQL
 export const executeQuery = async (sql: string): Promise<any> => {
   try {
     console.log('🔍 Executando SQL:', sql);
@@ -528,7 +644,7 @@ export const executeQuery = async (sql: string): Promise<any> => {
   }
 };
 
-// Função salvar conferência (usa Sandbox)
+// Função salvar conferência
 export const salvarConferenciaAPI = async (data: {
   NUNOTA: number;
   ORDEMCARGA: number;
@@ -577,7 +693,7 @@ export const salvarConferenciaAPI = async (data: {
   }
 };
 
-// Função para buscar CODUSU (usa Sandbox)
+// Função para buscar CODUSU
 export const buscarCodUsu = async (username: string): Promise<number> => {
   try {
     const sql = `SELECT CODUSU FROM TSIUSU WHERE NOMEUSU = '${username}'`;
@@ -594,7 +710,7 @@ export const buscarCodUsu = async (username: string): Promise<number> => {
   }
 }
 
-// Função para salvar lote (usa Sandbox)
+// Função para salvar lote
 export const salvarLoteAPI = async (
   nunota: number,
   codprod: number,
@@ -604,7 +720,6 @@ export const salvarLoteAPI = async (
   try {
     console.log('🔄 Iniciando salvamento do lote:', { nunota, codprod, lote });
 
-    // Verificar se já existe lote para esta nota
     const sqlVerificacaoLote = `SELECT NUNOTA FROM AD_LOTESALMOX WHERE NUNOTA = ${nunota}`;
     
     let existeLote = false;
@@ -616,7 +731,6 @@ export const salvarLoteAPI = async (
       console.log('ℹ️ Não foi possível verificar registro em AD_LOTESALMOX');
     }
 
-    // Salvar/Atualizar AD_LOTESALMOX
     const requestBodyLoteSalmax = {
       dataSet: {
         rootEntity: "AD_LOTESALMOX",
@@ -642,7 +756,6 @@ export const salvarLoteAPI = async (
     await queryJson('CRUDServiceProvider.saveRecord', requestBodyLoteSalmax);
     console.log('✅ Vínculo da nota salvo/atualizado com sucesso');
 
-    // Verificar se já existe produto vinculado
     const sqlVerificacaoProd = `
       SELECT CODIGO, NUNOTA, CODPROD FROM AD_LOTESPROD 
       WHERE NUNOTA = ${nunota} AND CODPROD = ${codprod}
@@ -663,7 +776,6 @@ export const salvarLoteAPI = async (
       console.log('ℹ️ Não foi possível verificar registro em AD_LOTESPROD');
     }
 
-    // Salvar/Atualizar AD_LOTESPROD
     const requestBodyLoteProd = {
       dataSet: {
         rootEntity: "AD_LOTESPROD",
@@ -718,7 +830,7 @@ export const salvarLoteAPI = async (
   }
 };
 
-// Função query para XML (usa Sandbox)
+// Função query para XML
 export const query = async (serviceName: string, requestBody: string): Promise<any> => {
   const xmlRequest = `<?xml version="1.0" encoding="ISO-8859-1"?>
 <serviceRequest serviceName="${escapeXml(serviceName)}">
