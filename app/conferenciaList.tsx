@@ -22,7 +22,7 @@ export default function ConferenciaListaScreen() {
   const { session } = useSession();
   const router = useRouter();
   const [dados, setDados] = useState<DadosConferencia[]>([]);
-  const [loading, setLoading] = useState(true); // Inicia como true para carregar automaticamente
+  const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
 
@@ -32,8 +32,6 @@ export default function ConferenciaListaScreen() {
     };
     loadData();
   }, [session]);
-
-  
 
   const buscarTodasConferencias = async () => {
     if (!session?.jsessionid) {
@@ -46,6 +44,7 @@ export default function ConferenciaListaScreen() {
       setLoading(true);
       setError(null);
       
+      // Opção 1: Usando TOP (SQL Server)
       const sqlQuery = `
         WITH EXP_ULTIMO AS (
           SELECT 
@@ -55,7 +54,7 @@ export default function ConferenciaListaScreen() {
           WHERE SITUACAO IS NOT NULL
         )
 
-        SELECT
+        SELECT TOP 20
           EXP.ORDEMCARGA,
           PAR.NOMEPARC,
           ISNULL(EXP.VOLUMES, 0) AS VOLUMES,
@@ -100,7 +99,6 @@ export default function ConferenciaListaScreen() {
     }
   };
 
-
   const filteredConferencias = dados.filter(conf => {
     const matchesSearch = searchTerm === '' || 
       conf.NUNOTA.toString().includes(searchTerm) ||
@@ -112,20 +110,18 @@ export default function ConferenciaListaScreen() {
   });
 
   const getStatusColor = (status: string, volumes: number, volumeTotal: number) => {
-  // Se todos os volumes foram conferidos
-  if (volumes === volumeTotal && volumeTotal > 0) {
-    return '#4CAF50'; // Verde para completo
-  }
-  
-  // Status específicos
-  switch (status) {
-    case 'FINALIZADO':
-    case 'Conferência completa':
-      return '#4CAF50'; // Verde
-    default:
-      return '#F44336'; // Azul se parcial, vermelho se nenhum
-  }
-};
+    if (volumes === volumeTotal && volumeTotal > 0) {
+      return '#4CAF50';
+    }
+    
+    switch (status) {
+      case 'FINALIZADO':
+      case 'Conferência completa':
+        return '#4CAF50';
+      default:
+        return '#F44336';
+    }
+  };
 
   const renderItem = ({ item }: { item: DadosConferencia }) => (
     <TouchableOpacity 

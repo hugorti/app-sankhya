@@ -98,7 +98,7 @@ export default function LotesParceiroScreen() {
     try {
       setLoading(true);
       const sql = `
-        SELECT
+        SELECT TOP 20
           CAB.NUNOTA, 
           CAB.CODPARC,
           PAR.NOMEPARC,
@@ -178,159 +178,152 @@ export default function LotesParceiroScreen() {
     setShowDateSelector(true);
   };
 
-// E também atualize a função confirmarData:
-const confirmarData = () => {
-  if (dia && mes && ano) {
-    const diaFormatado = dia.padStart(2, '0');
-    const mesFormatado = mes.padStart(2, '0');
-    const dataFormatada = `${diaFormatado}/${mesFormatado}/${ano}`;
-    setDataValidade(dataFormatada);
+  const confirmarData = () => {
+    if (dia && mes && ano) {
+      const diaFormatado = dia.padStart(2, '0');
+      const mesFormatado = mes.padStart(2, '0');
+      const dataFormatada = `${diaFormatado}/${mesFormatado}/${ano}`;
+      setDataValidade(dataFormatada);
+      setShowDateSelector(false);
+    } else {
+      Alert.alert('Atenção', 'Por favor, preencha todos os campos da data');
+    }
+  };
+
+  const cancelarSelecaoData = () => {
     setShowDateSelector(false);
-  } else {
-    Alert.alert('Atenção', 'Por favor, preencha todos os campos da data');
-  }
-};
+  };
 
-const cancelarSelecaoData = () => {
-    setShowDateSelector(false);
-};
-
-const salvarLote = async () => {
-  if (!notaSelecionada || !lote.trim()) {
-    Alert.alert('Atenção', 'Por favor, informe o lote');
-    return;
-  }
-
-  if (!dataValidade) {
-    Alert.alert('Atenção', 'Por favor, selecione a data de validade');
-    return;
-  }
-
-  try {
-    setSalvando(true);
-    const resultado = await salvarLoteAPI(
-      notaSelecionada.NUNOTA, 
-      notaSelecionada.CODPROD, 
-      lote,
-      dataValidade
-    );
-    
-    await buscarNotas();
-    Alert.alert('Sucesso', 'Lote vinculado com sucesso!');
-    
-    setModalVisible(false);
-    setNotaSelecionada(null);
-    setLote('');
-    setDataValidade('');
-    
-  } catch (error: any) {
-    console.error('Erro ao salvar lote:', error);
-    Alert.alert('Erro', error.message || 'Falha ao vincular o lote');
-  } finally {
-    setSalvando(false);
-  }
-};
-
-const abrirModalLote = (nota: NotaParceiro) => {
-  if (nota.loteVinculado) {
-    Alert.alert(
-      'Lote já vinculado',
-      `Este produto já possui o lote: ${nota.loteVinculado}\n\nDeseja editar o lote?`,
-      [
-        {
-          text: 'Cancelar',
-          style: 'cancel'
-        },
-        {
-          text: 'Editar',
-          onPress: () => {
-            setNotaSelecionada(nota);
-            setLote(nota.loteVinculado || '');
-            setDataValidade(nota.dataValidade || '');
-            setModalVisible(true);
-          }
-        }
-      ]
-    );
-  } else {
-    setNotaSelecionada(nota);
-    setLote('');
-    setDataValidade('');
-    setModalVisible(true);
-  }
-};
-
-// Primeiro, crie uma função para formatar a data
-const formatarDataExibicao = (dataString?: string | null): string => {
-  if (!dataString) return '';
-
-  try {
-    const apenasData = dataString.split(/[T ]/)[0];
-
-    // YYYY-MM-DD → DD/MM/YYYY
-    if (/^\d{4}-\d{2}-\d{2}$/.test(apenasData)) {
-      const [ano, mes, dia] = apenasData.split('-');
-      return `${dia}/${mes}/${ano}`;
+  const salvarLote = async () => {
+    if (!notaSelecionada || !lote.trim()) {
+      Alert.alert('Atenção', 'Por favor, informe o lote');
+      return;
     }
 
-    // DDMMYYYY → DD/MM/YYYY
-    if (/^\d{8}$/.test(apenasData)) {
-      const dia = apenasData.substring(0, 2);
-      const mes = apenasData.substring(2, 4);
-      const ano = apenasData.substring(4, 8);
-      return `${dia}/${mes}/${ano}`;
+    if (!dataValidade) {
+      Alert.alert('Atenção', 'Por favor, selecione a data de validade');
+      return;
     }
 
-    return apenasData;
-  } catch {
-    return String(dataString);
-  }
-};
-
-
-// No renderItem, use a função de formatação:
-const renderItem = ({ item }: { item: NotaParceiro }) => (
-  <TouchableOpacity
-    style={[
-      styles.notaCard,
-      item.loteVinculado && styles.notaComLote
-    ]}
-    onPress={() => abrirModalLote(item)}
-  >
-    <View style={styles.notaHeader}>
-      <Text style={styles.notaNumero}>Nota: {item.NUNOTA || 'N/A'}</Text>
-      <Text style={styles.parceiroNome}>{item.NOMEPARC || 'Parceiro não informado'}</Text>
-    </View>
-    
-    <View style={styles.notaBody}>
-      <Text style={styles.produtoTexto}>{item.CODPROD} - {item.DESCRPROD || 'Produto não informado'}</Text>
-      {/* <Text style={styles.referencia}>Ref: {item.REFERENCIA || 'N/A'}</Text> */}
+    try {
+      setSalvando(true);
+      const resultado = await salvarLoteAPI(
+        notaSelecionada.NUNOTA, 
+        notaSelecionada.CODPROD, 
+        lote,
+        dataValidade
+      );
       
-      {/* Quantidade e Data de Validade na mesma linha */}
-      <View style={styles.quantidadeContainer}>
-        <Text style={styles.quantidade}>Qtd: {item.QTDCONF || 0}</Text>
-        {item.dataValidade && (
-          <Text style={styles.dataValidadeText}>
-            VAL: {formatarDataExibicao(item.dataValidade)}
-          </Text>
-        )}
+      await buscarNotas();
+      Alert.alert('Sucesso', 'Lote vinculado com sucesso!');
+      
+      setModalVisible(false);
+      setNotaSelecionada(null);
+      setLote('');
+      setDataValidade('');
+      
+    } catch (error: any) {
+      console.error('Erro ao salvar lote:', error);
+      Alert.alert('Erro', error.message || 'Falha ao vincular o lote');
+    } finally {
+      setSalvando(false);
+    }
+  };
+
+  const abrirModalLote = (nota: NotaParceiro) => {
+    if (nota.loteVinculado) {
+      Alert.alert(
+        'Lote já vinculado',
+        `Este produto já possui o lote: ${nota.loteVinculado}\n\nDeseja editar o lote?`,
+        [
+          {
+            text: 'Cancelar',
+            style: 'cancel'
+          },
+          {
+            text: 'Editar',
+            onPress: () => {
+              setNotaSelecionada(nota);
+              setLote(nota.loteVinculado || '');
+              setDataValidade(nota.dataValidade || '');
+              setModalVisible(true);
+            }
+          }
+        ]
+      );
+    } else {
+      setNotaSelecionada(nota);
+      setLote('');
+      setDataValidade('');
+      setModalVisible(true);
+    }
+  };
+
+  const formatarDataExibicao = (dataString?: string | null): string => {
+    if (!dataString) return '';
+
+    try {
+      const apenasData = dataString.split(/[T ]/)[0];
+
+      // YYYY-MM-DD → DD/MM/YYYY
+      if (/^\d{4}-\d{2}-\d{2}$/.test(apenasData)) {
+        const [ano, mes, dia] = apenasData.split('-');
+        return `${dia}/${mes}/${ano}`;
+      }
+
+      // DDMMYYYY → DD/MM/YYYY
+      if (/^\d{8}$/.test(apenasData)) {
+        const dia = apenasData.substring(0, 2);
+        const mes = apenasData.substring(2, 4);
+        const ano = apenasData.substring(4, 8);
+        return `${dia}/${mes}/${ano}`;
+      }
+
+      return apenasData;
+    } catch {
+      return String(dataString);
+    }
+  };
+
+  const renderItem = ({ item }: { item: NotaParceiro }) => (
+    <TouchableOpacity
+      style={[
+        styles.notaCard,
+        item.loteVinculado && styles.notaComLote
+      ]}
+      onPress={() => abrirModalLote(item)}
+    >
+      <View style={styles.notaHeader}>
+        <Text style={styles.notaNumero}>Nota: {item.NUNOTA || 'N/A'}</Text>
+        <Text style={styles.parceiroNome}>{item.NOMEPARC || 'Parceiro não informado'}</Text>
       </View>
       
-      {/* Container do Lote (aparece apenas se tiver lote vinculado) */}
-      {item.loteVinculado && (
-        <View style={styles.loteContainer}>
-          <Ionicons name="pricetag" size={16} color="#fff" />
-          <Text style={styles.loteText}>LOTE: {item.loteVinculado}</Text>
-          <Ionicons name="checkmark-circle" size={16} color="#2e7d32" style={styles.checkIcon} />
+      <View style={styles.notaBody}>
+        <Text style={styles.produtoTexto}>{item.CODPROD} - {item.DESCRPROD || 'Produto não informado'}</Text>
+        
+        <View style={styles.quantidadeContainer}>
+          <Text style={styles.quantidade}>Qtd: {item.QTDCONF || 0}</Text>
+          {item.dataValidade && (
+            <Text style={styles.dataValidadeText}>
+              VAL: {formatarDataExibicao(item.dataValidade)}
+            </Text>
+          )}
         </View>
-      )}
-    </View>
-  </TouchableOpacity>
-);
-  // Gerar arrays para dias, meses e anos
-const dias = Array.from({ length: 31 }, (_, i) => (i + 1).toString());
-const meses = Array.from({ length: 12 }, (_, i) => (i + 1).toString());
-const anos = Array.from({ length: 10 }, (_, i) => (new Date().getFullYear() + i).toString());
+        
+        {item.loteVinculado && (
+          <View style={styles.loteContainer}>
+            <Ionicons name="pricetag" size={16} color="#fff" />
+            <Text style={styles.loteText}>LOTE: {item.loteVinculado}</Text>
+            <Ionicons name="checkmark-circle" size={16} color="#fff" style={styles.checkIcon} />
+          </View>
+        )}
+      </View>
+    </TouchableOpacity>
+  );
+
+  const dias = Array.from({ length: 31 }, (_, i) => (i + 1).toString());
+  const meses = Array.from({ length: 12 }, (_, i) => (i + 1).toString());
+  const anos = Array.from({ length: 10 }, (_, i) => (new Date().getFullYear() + i).toString());
 
   return (
     <SafeAreaView style={styles.container}>
@@ -443,13 +436,8 @@ const anos = Array.from({ length: 10 }, (_, i) => (new Date().getFullYear() + i)
                 </View>
                 
                 <View style={styles.modalInfo}>
-                </View>
-                <View style={styles.modalInfo}>
                   <Text style={styles.modalLabel}>Produto:</Text>
                   <Text style={styles.modalValue}>{notaSelecionada.CODPROD} - {notaSelecionada.DESCRPROD}</Text>
-                </View>
-                
-                <View style={styles.modalInfo}>
                 </View>
 
                 {notaSelecionada.loteVinculado && (
@@ -762,7 +750,6 @@ const styles = StyleSheet.create({
     color: '#666',
     marginBottom: 2,
   },
-  
   loteContainer: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -780,7 +767,7 @@ const styles = StyleSheet.create({
     marginRight: 6,
     fontSize: 14,
   },
-   quantidadeContainer: {
+  quantidadeContainer: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
@@ -793,7 +780,7 @@ const styles = StyleSheet.create({
   },
   dataValidadeText: {
     fontSize: 12,
-    color: '#9C27B0', // Verde para destacar
+    color: '#9C27B0',
     fontWeight: '600',
   },
   checkIcon: {
