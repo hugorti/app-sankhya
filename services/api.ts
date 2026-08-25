@@ -4,7 +4,7 @@ import { Buffer } from 'buffer';
 import { XMLParser } from 'fast-xml-parser';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { AppState, AppStateStatus } from 'react-native';
-import { AuthService } from './auth';
+import { authService } from './auth';
 
 // ==================== CONFIGURAÇÕES DE AMBIENTE ====================
 export type EnvironmentType = 'TEST' | 'PRODUCTION';
@@ -33,20 +33,17 @@ export const ENVIRONMENTS: Record<EnvironmentType, EnvironmentConfig> = {
   },
   PRODUCTION: {
     name: 'Ambiente Produção',
-    BASE_URL: 'https://api.sankhya.com.br/gateway/v1/mge/', // Ajuste conforme necessário
+    BASE_URL: 'https://api.sankhya.com.br/gateway/v1/mge/',
     DEFAULT_IP: '',
     DEFAULT_PORT: '',
-    AUTH_URL: 'https://api.sankhya.com.br/authenticate', // Ajuste conforme necessário
+    AUTH_URL: 'https://api.sankhya.com.br/authenticate',
     CLIENT_ID: '3112542a-4a20-4e08-92a2-298649f74911',
     CLIENT_SECRET: 'lvzGUmX7LOB5X60XVo22Sr9g2ph3GRS9',
     X_TOKEN: 'fa55d0c2-c607-4ac8-8f4f-c4d4ff7576cf',
   }
 };
 
-// Ambiente atual (será carregado do AsyncStorage)
 let currentEnvironment: EnvironmentType = 'TEST';
-
-// ==================== FIM DAS CONFIGURAÇÕES ====================
 
 const SERVER_URL_KEY = 'saved_server_url';
 const ENVIRONMENT_KEY = 'selected_environment';
@@ -55,8 +52,8 @@ const DEFAULT_PORT = '';
 const DEFAULT_URL = `${DEFAULT_IP}:${DEFAULT_PORT}`;
 const INACTIVITY_TIMEOUT = 5 * 60 * 1000;
 
-// URL base atual (será atualizada quando o ambiente mudar)
 let currentBaseURL = `http://${DEFAULT_URL}/mge/`;
+let configuredBaseURL: string | null = null;
 
 const parser = new XMLParser({
   attributeNamePrefix: '@_',
@@ -77,10 +74,6 @@ let lastActivityTime: number | null = null;
 let onInactiveCallback: (() => Promise<void>) | null = null;
 let appStateSubscription: { remove: () => void } | null = null;
 
-// Inicializar AuthService
-const authService = AuthService.getInstance();
-
-// Criar instância do axios para login (rota original)
 let loginApi: AxiosInstance = axios.create({
   baseURL: currentBaseURL,
   timeout: 30000,
@@ -90,7 +83,6 @@ let loginApi: AxiosInstance = axios.create({
   }
 });
 
-// Criar instância do axios para consultas (nova rota Sandbox)
 let queryApi: AxiosInstance = axios.create({
   baseURL: ENVIRONMENTS.TEST.BASE_URL,
   timeout: 30000,
@@ -102,59 +94,68 @@ let queryApi: AxiosInstance = axios.create({
 
 // ==================== FUNÇÕES DE GERENCIAMENTO DE AMBIENTE ====================
 
-// Obter configuração do ambiente atual
 export const getCurrentEnvironmentConfig = (): EnvironmentConfig => {
   return ENVIRONMENTS[currentEnvironment];
 };
 
-// Obter ambiente atual
 export const getCurrentEnvironment = (): EnvironmentType => {
   return currentEnvironment;
 };
 
-// Salvar ambiente selecionado
+export const getCurrentApiURL = (): string => {
+  return queryApi.defaults.baseURL || 'URL não configurada';
+};
+
+export const getConfigDetails = (): { environment: EnvironmentType; url: string; isManual: boolean } => {
+  return {
+    environment: currentEnvironment,
+    url: queryApi.defaults.baseURL || 'URL não configurada',
+    isManual: configuredBaseURL !== null
+  };
+};
+
+// services/api.ts - Substituir estas funções
+
 export const setEnvironment = async (environment: EnvironmentType): Promise<void> => {
   try {
+    console.log(`🔄 Mudando para ambiente: ${environment}`);
+    
     currentEnvironment = environment;
     await AsyncStorage.setItem(ENVIRONMENT_KEY, environment);
     
-    // Atualizar a URL base da queryApi
     const config = ENVIRONMENTS[environment];
-    queryApi.defaults.baseURL = config.BASE_URL;
     
-    // Atualizar AuthService com novas credenciais
+    // ATUALIZAR CREDENCIAIS PRIMEIRO
     await updateAuthCredentials(config);
     
+    // Depois atualizar a URL
+    const baseURL = config.BASE_URL;
+    queryApi.defaults.baseURL = baseURL;
+    configuredBaseURL = null;
+    currentBaseURL = baseURL;
+    
+    recreateLoginApiInstance(baseURL);
+    
+    // Invalidar token antigo para forçar geração com novas credenciais
+    await authService.invalidateToken();
+    
     console.log(`✅ Ambiente alterado para: ${config.name}`);
-    console.log(`📡 URL base: ${config.BASE_URL}`);
+    console.log(`📍 URL em uso: ${queryApi.defaults.baseURL}`);
+    console.log(`🔑 Credenciais atualizadas para: ${config.AUTH_URL}`);
+    
   } catch (error) {
     console.error('❌ Erro ao salvar ambiente:', error);
     throw error;
   }
 };
 
-// Carregar ambiente salvo
-export const loadSavedEnvironment = async (): Promise<EnvironmentType> => {
-  try {
-    const saved = await AsyncStorage.getItem(ENVIRONMENT_KEY);
-    if (saved === 'TEST' || saved === 'PRODUCTION') {
-      currentEnvironment = saved;
-      const config = ENVIRONMENTS[currentEnvironment];
-      queryApi.defaults.baseURL = config.BASE_URL;
-      await updateAuthCredentials(config);
-      console.log(`📌 Ambiente carregado: ${config.name}`);
-      return currentEnvironment;
-    }
-  } catch (error) {
-    console.error('❌ Erro ao carregar ambiente:', error);
-  }
-  return 'TEST'; // Padrão
-};
-
-// Atualizar credenciais do AuthService
 const updateAuthCredentials = async (config: EnvironmentConfig): Promise<void> => {
   try {
-    // Atualizar as variáveis no AuthService (você precisará modificar o AuthService para aceitar isso)
+    console.log('🔄 Atualizando credenciais do AuthService para:', config.name);
+    console.log(`📍 AUTH_URL: ${config.AUTH_URL}`);
+    console.log(`🔑 CLIENT_ID: ${config.CLIENT_ID}`);
+    console.log(`🔐 X_TOKEN: ${config.X_TOKEN}`);
+    
     await authService.updateCredentials({
       AUTH_URL: config.AUTH_URL,
       CLIENT_ID: config.CLIENT_ID,
@@ -162,18 +163,50 @@ const updateAuthCredentials = async (config: EnvironmentConfig): Promise<void> =
       X_TOKEN: config.X_TOKEN
     });
     
-    // Invalidar token antigo para gerar novo com as novas credenciais
+    // Invalidar token para forçar nova geração com as novas credenciais
     await authService.invalidateToken();
     
-    console.log('🔐 Credenciais atualizadas para o novo ambiente');
+    console.log('✅ Credenciais atualizadas com sucesso');
   } catch (error) {
     console.error('❌ Erro ao atualizar credenciais:', error);
+    throw error;
   }
 };
 
-// ==================== FUNÇÕES EXISTENTES ====================
+export const loadSavedEnvironment = async (): Promise<EnvironmentType> => {
+  try {
+    const saved = await AsyncStorage.getItem(ENVIRONMENT_KEY);
+    if (saved === 'TEST' || saved === 'PRODUCTION') {
+      currentEnvironment = saved;
+      const config = ENVIRONMENTS[currentEnvironment];
+      
+      // ATUALIZAR CREDENCIAIS PRIMEIRO
+      await updateAuthCredentials(config);
+      
+      const baseURL = config.BASE_URL;
+      queryApi.defaults.baseURL = baseURL;
+      configuredBaseURL = null;
+      currentBaseURL = baseURL;
+      
+      console.log(`📌 Ambiente carregado: ${config.name}`);
+      console.log(`📍 URL do ambiente: ${baseURL}`);
+      return currentEnvironment;
+    }
+  } catch (error) {
+    console.error('❌ Erro ao carregar ambiente:', error);
+  }
+  return 'TEST';
+};
 
-// Funções para gerenciar inatividade
+// ==================== FUNÇÕES DE USUÁRIO ====================
+
+export const setCurrentUser = (username: string): void => {
+  authService.setCurrentUser(username);
+  console.log(`👤 Usuário definido na API: ${username}`);
+};
+
+// ==================== FUNÇÕES DE INATIVIDADE ====================
+
 export const setupInactivityListener = (callback: () => Promise<void>) => {
   onInactiveCallback = async () => {
     try {
@@ -235,7 +268,8 @@ export const clearInactivityTimer = () => {
   }
 };
 
-// Helper function to validate and format server URL
+// ==================== FUNÇÕES DE CONFIGURAÇÃO DE URL ====================
+
 const formatServerUrl = (ipPort: string): string => {
   ipPort = ipPort.replace(/^https?:\/\//, '');
   let [ip, port] = ipPort.split(':');
@@ -254,15 +288,24 @@ const formatServerUrl = (ipPort: string): string => {
   return `http://${ip}:${port}/mge/`;
 };
 
-// Set base URL with validation
-export const setBaseURL = async (ipPort: string): Promise<boolean> => {
+export const setManualURL = async (ipPort: string): Promise<boolean> => {
   try {
     const formattedUrl = formatServerUrl(ipPort);
+    
+    console.log(`🔧 Testando conexão com: ${formattedUrl}`);
     await axios.get(formattedUrl, { timeout: 5000 });
+    
+    configuredBaseURL = formattedUrl;
     currentBaseURL = formattedUrl;
-    recreateLoginApiInstance(currentBaseURL);
+    
+    recreateLoginApiInstance(configuredBaseURL);
+    queryApi.defaults.baseURL = configuredBaseURL;
+    
     const cleanIpPort = ipPort.replace(/^https?:\/\//, '').replace(/\/+$/, '');
     await AsyncStorage.setItem(SERVER_URL_KEY, cleanIpPort);
+    
+    console.log(`✅ URL manual configurada: ${configuredBaseURL}`);
+    console.log(`📍 Query API agora usa: ${queryApi.defaults.baseURL}`);
     return true;
   } catch (error) {
     throw new Error(
@@ -275,17 +318,36 @@ export const setBaseURL = async (ipPort: string): Promise<boolean> => {
   }
 };
 
-// Initialize API with saved URL
+export const resetToEnvironmentURL = (): void => {
+  const config = ENVIRONMENTS[currentEnvironment];
+  const baseURL = config.BASE_URL;
+  queryApi.defaults.baseURL = baseURL;
+  configuredBaseURL = null;
+  currentBaseURL = baseURL;
+  recreateLoginApiInstance(baseURL);
+  
+  console.log(`🔄 Resetado para URL do ambiente: ${baseURL}`);
+};
+
+export const setBaseURL = async (ipPort: string): Promise<boolean> => {
+  return await setManualURL(ipPort);
+};
+
 export const initializeAPI = async (): Promise<void> => {
   try {
-    // Carregar ambiente salvo
     await loadSavedEnvironment();
     
-    const saved = await AsyncStorage.getItem(SERVER_URL_KEY);
-    if (saved) {
-      const formattedUrl = formatServerUrl(saved);
-      currentBaseURL = formattedUrl;
-      recreateLoginApiInstance(currentBaseURL);
+    const config = ENVIRONMENTS[currentEnvironment];
+    queryApi.defaults.baseURL = config.BASE_URL;
+    console.log(`✅ API inicializada com URL do ambiente: ${config.BASE_URL}`);
+    
+    const session = await AsyncStorage.getItem('sankhya_session');
+    if (session) {
+      const sessionData = JSON.parse(session);
+      if (sessionData.username) {
+        setCurrentUser(sessionData.username);
+        console.log('👤 Usuário recuperado da sessão na inicialização');
+      }
     }
     
     const bearerToken = await authService.getBearerToken();
@@ -310,9 +372,9 @@ const recreateLoginApiInstance = (baseUrl: string) => {
   configureLoginInterceptors();
 };
 
-// Configurar interceptors para Login API
+// ==================== INTERCEPTORS ====================
+
 const configureLoginInterceptors = () => {
-  // Request interceptor para adicionar token Bearer
   loginApi.interceptors.request.use(async (config) => {
     try {
       const bearerToken = await authService.getBearerToken();
@@ -339,7 +401,6 @@ const configureLoginInterceptors = () => {
     }
   });
 
-  // Response interceptor para tratar erros de autenticação
   loginApi.interceptors.response.use(
     (response) => {
       resetInactivityTimer();
@@ -393,7 +454,6 @@ const configureLoginInterceptors = () => {
   );
 };
 
-// Configurar interceptors para Query API (Sandbox)
 const configureQueryInterceptors = () => {
   queryApi.interceptors.request.use(async (config) => {
     try {
@@ -448,12 +508,14 @@ const configureQueryInterceptors = () => {
   );
 };
 
-// Executar configuração dos interceptors
 configureLoginInterceptors();
 configureQueryInterceptors();
 
-// Função de login (mantém a rota original)
+// ==================== FUNÇÕES DE LOGIN/LOGOUT ====================
+
 export const login = async (username: string, password: string): Promise<LoginResponse> => {
+  console.log('🚀 INICIANDO LOGIN PARA:', username);
+  
   const xmlRequest = `<?xml version="1.0" encoding="ISO-8859-1"?>
 <serviceRequest serviceName="MobileLoginSP.login">
   <requestBody>
@@ -465,10 +527,18 @@ export const login = async (username: string, password: string): Promise<LoginRe
   try {
     clearInactivityTimer();
     
+    console.log('👤 DEFININDO USUÁRIO NO AUTH SERVICE:', username);
+    setCurrentUser(username);
+    
+    console.log('🔐 GERANDO TOKEN PARA:', username);
     const bearerToken = await authService.getBearerToken();
+    console.log('🔐 TOKEN GERADO:', bearerToken ? `${bearerToken.substring(0, 50)}...` : 'NULO');
+    
     if (!bearerToken) {
       throw new Error('Não foi possível obter token de autenticação');
     }
+    
+    console.log(`📍 URL de login: ${loginApi.defaults.baseURL}`);
     
     const response = await loginApi.post(
       'services.sbr?serviceName=MobileLoginSP.login',
@@ -534,6 +604,7 @@ export const login = async (username: string, password: string): Promise<LoginRe
 
   } catch (error) {
     console.error('❌ Erro no login:', error);
+    await authService.invalidateToken();
     throw new Error(
       axios.isAxiosError(error)
         ? 'Erro de conexão com o servidor'
@@ -544,11 +615,22 @@ export const login = async (username: string, password: string): Promise<LoginRe
   }
 };
 
-// Função de logout (usa a rota original)
 export const logout = async (isAutoLogout = false): Promise<void> => {
   try {
     clearInactivityTimer();
-    await authService.invalidateToken();
+    
+    const session = await AsyncStorage.getItem('sankhya_session');
+    let username = null;
+    if (session) {
+      const sessionData = JSON.parse(session);
+      username = sessionData.username;
+    }
+    
+    if (username) {
+      await authService.invalidateTokenForUser(username);
+    } else {
+      await authService.invalidateToken();
+    }
     
     if (isAutoLogout) {
       await Promise.race([
@@ -565,11 +647,11 @@ export const logout = async (isAutoLogout = false): Promise<void> => {
     }
   } finally {
     await AsyncStorage.removeItem('sankhya_session');
-    await authService.invalidateToken();
   }
 };
 
-// Função queryJson
+// ==================== FUNÇÕES DE CONSULTA ====================
+
 export const queryJson = async (serviceName: string, requestBody: any): Promise<any> => {
   try {
     const bearerToken = await authService.getBearerToken();
@@ -584,6 +666,7 @@ export const queryJson = async (serviceName: string, requestBody: any): Promise<
     };
     
     console.log(`📤 Enviando requisição para: ${serviceName}`);
+    console.log(`📍 URL base: ${queryApi.defaults.baseURL}`);
     console.log('📦 Payload:', JSON.stringify(payload, null, 2));
     
     const response = await queryApi.post(
@@ -624,10 +707,10 @@ export const queryJson = async (serviceName: string, requestBody: any): Promise<
   }
 };
 
-// Função para executar query SQL
 export const executeQuery = async (sql: string): Promise<any> => {
   try {
-    console.log('🔍 Executando SQL:', sql);
+    console.log('🔍 Executando SQL no servidor:', getCurrentApiURL());
+    console.log('📝 SQL:', sql);
     
     const requestBody = {
       sql: sql
@@ -644,7 +727,102 @@ export const executeQuery = async (sql: string): Promise<any> => {
   }
 };
 
-// Função salvar conferência
+// ==================== FUNÇÃO PARA BUSCAR GRUPO DO USUÁRIO ====================
+
+export const buscarGrupoUsuario = async (username: string): Promise<number | null> => {
+  try {
+    console.log(`🔍 Buscando grupo do usuário: "${username}"`);
+    console.log(`📍 URL em uso: ${getCurrentApiURL()}`);
+    
+    // TENTATIVA 1: Busca exata
+    let sql = `SELECT CODGRUPO FROM TSIUSU WHERE NOMEUSU = '${username}'`;
+    console.log(`📝 SQL 1: ${sql}`);
+    let result = await executeQuery(sql);
+    
+    if (result && result.rows && result.rows.length > 0) {
+      const group = Number(result.rows[0][0]);
+      console.log(`✅ Grupo encontrado (busca exata): ${group}`);
+      return group;
+    }
+    
+    // TENTATIVA 2: Busca com UPPER
+    sql = `SELECT CODGRUPO FROM TSIUSU WHERE UPPER(NOMEUSU) = UPPER('${username}')`;
+    console.log(`📝 SQL 2: ${sql}`);
+    result = await executeQuery(sql);
+    
+    if (result && result.rows && result.rows.length > 0) {
+      const group = Number(result.rows[0][0]);
+      console.log(`✅ Grupo encontrado (UPPER): ${group}`);
+      return group;
+    }
+    
+    // TENTATIVA 3: Busca com TRIM
+    sql = `SELECT CODGRUPO FROM TSIUSU WHERE TRIM(NOMEUSU) = TRIM('${username}')`;
+    console.log(`📝 SQL 3: ${sql}`);
+    result = await executeQuery(sql);
+    
+    if (result && result.rows && result.rows.length > 0) {
+      const group = Number(result.rows[0][0]);
+      console.log(`✅ Grupo encontrado (TRIM): ${group}`);
+      return group;
+    }
+    
+    // TENTATIVA 4: Busca removendo todos os espaços
+    const usernameNoSpaces = username.replace(/\s/g, '');
+    sql = `SELECT CODGRUPO FROM TSIUSU WHERE REPLACE(NOMEUSU, ' ', '') = '${usernameNoSpaces}'`;
+    console.log(`📝 SQL 4: ${sql}`);
+    result = await executeQuery(sql);
+    
+    if (result && result.rows && result.rows.length > 0) {
+      const group = Number(result.rows[0][0]);
+      console.log(`✅ Grupo encontrado (removendo espaços): ${group}`);
+      return group;
+    }
+    
+    // TENTATIVA 5: Busca com LIKE
+    sql = `SELECT CODGRUPO FROM TSIUSU WHERE NOMEUSU LIKE '%${username}%'`;
+    console.log(`📝 SQL 5: ${sql}`);
+    result = await executeQuery(sql);
+    
+    if (result && result.rows && result.rows.length > 0) {
+      const group = Number(result.rows[0][0]);
+      console.log(`✅ Grupo encontrado (LIKE): ${group}`);
+      return group;
+    }
+    
+    // TENTATIVA 6: Busca com LIKE UPPER
+    sql = `SELECT CODGRUPO FROM TSIUSU WHERE UPPER(NOMEUSU) LIKE UPPER('%${username}%')`;
+    console.log(`📝 SQL 6: ${sql}`);
+    result = await executeQuery(sql);
+    
+    if (result && result.rows && result.rows.length > 0) {
+      const group = Number(result.rows[0][0]);
+      console.log(`✅ Grupo encontrado (LIKE UPPER): ${group}`);
+      return group;
+    }
+    
+    // TENTATIVA 7: Busca com LIKE removendo espaços
+    sql = `SELECT CODGRUPO FROM TSIUSU WHERE REPLACE(NOMEUSU, ' ', '') LIKE '%${usernameNoSpaces}%'`;
+    console.log(`📝 SQL 7: ${sql}`);
+    result = await executeQuery(sql);
+    
+    if (result && result.rows && result.rows.length > 0) {
+      const group = Number(result.rows[0][0]);
+      console.log(`✅ Grupo encontrado (LIKE sem espaços): ${group}`);
+      return group;
+    }
+    
+    console.warn(`⚠️ Nenhum grupo encontrado para o usuário: "${username}"`);
+    return null;
+    
+  } catch (error) {
+    console.error('❌ Erro ao buscar grupo do usuário:', error);
+    return null;
+  }
+};
+
+// ==================== OUTRAS FUNÇÕES ====================
+
 export const salvarConferenciaAPI = async (data: {
   NUNOTA: number;
   ORDEMCARGA: number;
@@ -693,7 +871,6 @@ export const salvarConferenciaAPI = async (data: {
   }
 };
 
-// Função para buscar CODUSU
 export const buscarCodUsu = async (username: string): Promise<number> => {
   try {
     const sql = `SELECT CODUSU FROM TSIUSU WHERE NOMEUSU = '${username}'`;
@@ -708,9 +885,8 @@ export const buscarCodUsu = async (username: string): Promise<number> => {
     console.error('Erro ao buscar CODUSU:', error);
     throw error;
   }
-}
+};
 
-// Função para salvar lote
 export const salvarLoteAPI = async (
   nunota: number,
   codprod: number,
@@ -830,7 +1006,6 @@ export const salvarLoteAPI = async (
   }
 };
 
-// Função query para XML
 export const query = async (serviceName: string, requestBody: string): Promise<any> => {
   const xmlRequest = `<?xml version="1.0" encoding="ISO-8859-1"?>
 <serviceRequest serviceName="${escapeXml(serviceName)}">
@@ -876,7 +1051,8 @@ export const query = async (serviceName: string, requestBody: string): Promise<a
   }
 };
 
-// XML escape helper
+// ==================== HELPERS ====================
+
 function escapeXml(unsafe: string): string {
   if (!unsafe) return '';
   return unsafe.replace(/[<>&'"]/g, (c) => {
@@ -891,7 +1067,6 @@ function escapeXml(unsafe: string): string {
   });
 }
 
-// Initialize API on load
 initializeAPI().catch(error => {
   console.error('Failed to initialize API:', error);
 });

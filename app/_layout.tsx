@@ -1,125 +1,63 @@
+// app/_layout.tsx
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { Stack, useRouter } from 'expo-router';
 import { useSession } from '../hooks/useSession';
-import { ActivityIndicator, View } from 'react-native';
+import { ActivityIndicator, View, StyleSheet } from 'react-native';
 import { useEffect } from 'react';
-import { setupInactivityListener, clearInactivityTimer } from '../services/api';
 
 export default function RootLayout() {
-  const { session, loading, logout } = useSession();
+  const { session, loading, isAuthenticated } = useSession();
   const router = useRouter();
 
-  // Handle session timeout and automatic logout
-  useEffect(() => {
-    if (!session || !loading) return;
-
-    const handleInactiveLogout = async () => {
-      await logout();
-      router.replace('/login');
-    };
-
-    setupInactivityListener(handleInactiveLogout);
-
-    return () => {
-      clearInactivityTimer();
-    };
-  }, [session, loading, logout]);
-
-  // Handle initial routing based on auth state
+  // Redirecionar baseado no estado de autenticação
   useEffect(() => {
     if (!loading) {
-      if (!session) {
-        router.replace('/login');
-      } else {
+      console.log('🔄 Estado atual:', { 
+        hasSession: !!session, 
+        isAuthenticated, 
+        loading 
+      });
+      
+      if (session && isAuthenticated) {
+        console.log('➡️ Redirecionando para (tabs)');
         router.replace('/(tabs)');
+      } else {
+        console.log('➡️ Redirecionando para login');
+        router.replace('/login');
       }
     }
-  }, [session, loading]);
+  }, [loading, session, isAuthenticated]);
 
   if (loading) {
+    console.log('⏳ Mostrando loading...');
     return (
-      <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
-        <ActivityIndicator size="large" />
+      <View style={styles.loadingContainer}>
+        <ActivityIndicator size="large" color="#7E469B" />
       </View>
     );
   }
 
+  console.log('📱 Renderizando Stack Navigator');
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>
-      <Stack>
-        {/* Authentication Screens */}
-        <Stack.Screen 
-          name="login" 
-          options={{ 
-            title: 'Login Sankhya',
-            headerShown: false,
-            animation: 'fade',
-            gestureEnabled: false
-          }} 
-        />
-
-        {/* Main App Tabs */}
-        <Stack.Screen 
-          name="(tabs)" 
-          options={{
-            headerShown: false,
-            animation: 'fade',
-            gestureEnabled: false
-          }} 
-        />
-
-        {/* Feature Screens */}
-        <Stack.Screen 
-          name="expedicao" 
-          options={{
-            headerShown: false,
-            title: 'Expedição',
-            animation: 'slide_from_right',
-            gestureEnabled: true
-          }} 
-        />
-
-        <Stack.Screen 
-          name="conferencia" 
-          options={{ 
-            headerShown: false,
-            title: 'Conferência',
-            animation: 'slide_from_right',
-            gestureEnabled: true
-          }} 
-        />
-
-        <Stack.Screen 
-          name="conferenciaList" 
-          options={{ 
-            headerShown: false,
-            title: 'Conferências',
-            animation: 'slide_from_right',
-            gestureEnabled: true
-          }} 
-        />
-
-        <Stack.Screen 
-          name="almoxarife" 
-          options={{
-            headerShown: false,
-            title: 'Almoxarife',
-            animation: 'slide_from_right',
-            gestureEnabled: true
-          }} 
-        />
-
-        <Stack.Screen 
-          name="recebimento" 
-          options={{ 
-            headerShown: false,
-            title: 'Recebimento',
-            animation: 'slide_from_right',
-            gestureEnabled: true
-          }} 
-        />
-
+      <Stack screenOptions={{ headerShown: false }}>
+        <Stack.Screen name="login" />
+        <Stack.Screen name="(tabs)" />
+        <Stack.Screen name="expedicao" />
+        <Stack.Screen name="conferencia" />
+        <Stack.Screen name="conferenciaList" />
+        <Stack.Screen name="almoxarife" />
+        <Stack.Screen name="recebimento" />
       </Stack>
     </GestureHandlerRootView>
   );
 }
+
+const styles = StyleSheet.create({
+  loadingContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: '#f8f9fa',
+  },
+});

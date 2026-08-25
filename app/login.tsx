@@ -25,7 +25,21 @@ export default function LoginScreen() {
   const [isFormValid, setIsFormValid] = useState(false);
   const [configModalVisible, setConfigModalVisible] = useState(false);
   const router = useRouter();
-  const { login, loading, error } = useSession();
+  const { login, loading, error, isAuthenticated, session } = useSession();
+
+  // Se já estiver autenticado, redirecionar
+  useEffect(() => {
+    console.log('🔍 LoginScreen - Verificando autenticação:', { 
+      isAuthenticated, 
+      hasSession: !!session,
+      username: session?.username 
+    });
+    
+    if (isAuthenticated && session) {
+      console.log('➡️ LoginScreen - Redirecionando para (tabs)');
+      router.replace('/(tabs)');
+    }
+  }, [isAuthenticated, session]);
 
   // Carrega o último usuário salvo ao abrir a tela
   useEffect(() => {
@@ -51,7 +65,7 @@ export default function LoginScreen() {
     const formatted = text.toUpperCase();
     setUsername(formatted);
     try {
-      await AsyncStorage.setItem('lastUsername', formatted); // salva enquanto digita
+      await AsyncStorage.setItem('lastUsername', formatted);
     } catch (err) {
       console.error('Erro ao salvar usuário:', err);
     }
@@ -70,9 +84,13 @@ export default function LoginScreen() {
     }
   };
 
-  const handleSaveServerConfig = (ipPort: string) => {
-    setBaseURL(ipPort);
-    Alert.alert('Sucesso', 'Configuração do servidor atualizada com sucesso!');
+  const handleSaveServerConfig = async (ipPort: string) => {
+    try {
+      await setBaseURL(ipPort);
+      Alert.alert('Sucesso', 'Configuração do servidor atualizada com sucesso!');
+    } catch (error: any) {
+      Alert.alert('Erro', error.message || 'Não foi possível configurar o servidor');
+    }
   };
 
   const showValidationError = () => {
@@ -90,29 +108,24 @@ export default function LoginScreen() {
     ]);
   };
 
-const handleLoginError = (error: Error) => {
-  let errorMessage = 'Não foi possível fazer login.\n\n';
+  const handleLoginError = (error: Error) => {
+    let errorMessage = 'Não foi possível fazer login.\n\n';
 
-  if (error.message.includes('Timeout')) {
-    errorMessage +=
-      '• Verifique sua conexão com a internet.\n' +
-      '• O servidor pode estar indisponível.\n' +
-      '• Confira se o endereço do servidor está correto.';
-  } 
-  else if (error.message.includes('Credenciais')) {
-    errorMessage += '• Usuário ou senha incorreto';
-  } 
-  else {
-    errorMessage += `• Usuário ou senha incorreto`;
-  }
+    if (error.message.includes('Timeout')) {
+      errorMessage +=
+        '• Verifique sua conexão com a internet.\n' +
+        '• O servidor pode estar indisponível.\n' +
+        '• Confira se o endereço do servidor está correto.';
+    } else {
+      errorMessage += '• Usuário ou senha incorreto';
+    }
 
-  Alert.alert(
-    'Erro no Login',
-    errorMessage,
-    [{ text: 'OK', style: 'cancel' }]
-  );
-};
-
+    Alert.alert(
+      'Erro no Login',
+      errorMessage,
+      [{ text: 'OK', style: 'cancel' }]
+    );
+  };
 
   const toggleSecureEntry = () => {
     setSecureTextEntry(!secureTextEntry);
@@ -135,7 +148,6 @@ const handleLoginError = (error: Error) => {
         <Text style={styles.subtitle}>Sistema de Gestão</Text>
       </View>
       
-      {/* Campo de Usuário */}
       <View style={styles.inputContainer}>
         <View style={styles.inputWrapper}>
           <MaterialIcons name="person" size={24} color="#9c27b0" style={styles.icon} />
@@ -153,7 +165,6 @@ const handleLoginError = (error: Error) => {
         </View>
       </View>
       
-      {/* Campo de Senha */}
       <View style={styles.inputContainer}>
         <View style={styles.inputWrapper}>
           <MaterialIcons name="lock" size={24} color="#9c27b0" style={styles.icon} />
@@ -178,7 +189,6 @@ const handleLoginError = (error: Error) => {
         </View>
       </View>
 
-      {/* Botão de Login */}
       <TouchableOpacity 
         style={[
           styles.button, 
@@ -196,7 +206,6 @@ const handleLoginError = (error: Error) => {
         )}
       </TouchableOpacity>
 
-      {/* Botão de Configuração */}
       <TouchableOpacity 
         style={styles.configButton}
         onPress={() => setConfigModalVisible(true)}
@@ -223,20 +232,9 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     marginBottom: 40,
   },
-   logoImage: {
+  logoImage: {
     width: 200,
     height: 100,
-  },
-  title: {
-    fontSize: 32,
-    fontWeight: 'bold',
-    color: '#7E469B',
-    textAlign: 'center',
-    marginBottom: 5,
-    letterSpacing: 1,
-    textShadowColor: 'rgba(156, 39, 176, 0.2)',
-    textShadowOffset: { width: 0, height: 2 },
-    textShadowRadius: 4,
   },
   subtitle: {
     fontSize: 16,
@@ -301,7 +299,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    marginTop: 5,
+    marginTop: 15,
     padding: 10,
   },
   configButtonText: {
@@ -311,7 +309,7 @@ const styles = StyleSheet.create({
     fontWeight: '500',
   },
   footer: {
-    marginTop: 10,
+    marginTop: 20,
     alignItems: 'center',
   },
   footerText: {

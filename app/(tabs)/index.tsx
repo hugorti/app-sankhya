@@ -5,7 +5,7 @@ import { useSession } from '../../hooks/useSession';
 import { Ionicons } from '@expo/vector-icons';
 import { RootStackParamList } from '@/types/navigation';
 import { useEffect, useState } from 'react';
-import { queryJson } from '@/services/api';
+import { buscarGrupoUsuario, getCurrentApiURL } from '@/services/api';
 
 export default function HomeScreen() {
   const router = useRouter();
@@ -13,22 +13,31 @@ export default function HomeScreen() {
   const [userGroup, setUserGroup] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
 
-   const currentYear = new Date().getFullYear();
+  const currentYear = new Date().getFullYear();
 
   useEffect(() => {
     const fetchUserGroup = async () => {
-      if (!session?.username) return;
+      if (!session?.username) {
+        console.log('⚠️ Nenhum usuário na sessão');
+        setLoading(false);
+        return;
+      }
+      
+      console.log(`📍 URL em uso: ${getCurrentApiURL()}`);
+      console.log(`👤 Buscando grupo para: ${session.username}`);
       
       try {
-        const result = await queryJson('DbExplorerSP.executeQuery', {
-          sql: `SELECT CODGRUPO FROM TSIUSU WHERE NOMEUSU = '${session.username}'`
-        });
+        const group = await buscarGrupoUsuario(session.username);
+        setUserGroup(group);
         
-        if (result.rows.length > 0) {
-          setUserGroup(result.rows[0][0]);
+        if (group !== null) {
+          console.log(`✅ Grupo do usuário ${session.username}: ${group}`);
+        } else {
+          console.warn(`⚠️ Não foi possível encontrar o grupo para ${session.username}`);
         }
       } catch (error) {
-        console.error('Erro ao buscar grupo do usuário:', error);
+        console.error('❌ Erro ao buscar grupo:', error);
+        setUserGroup(null);
       } finally {
         setLoading(false);
       }
@@ -38,11 +47,28 @@ export default function HomeScreen() {
   }, [session]);
 
   const handleLogout = async () => {
-    try {
-      await logout();
-    } catch (error) {
-      Alert.alert('Erro', 'Não foi possível fazer logout');
-    }
+    Alert.alert(
+      'Confirmar Logout',
+      'Deseja realmente sair?',
+      [
+        { text: 'Cancelar', style: 'cancel' },
+        { 
+          text: 'Sair', 
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              console.log('🚪 Iniciando logout...');
+              await logout();
+              console.log('✅ Logout realizado, redirecionando para login...');
+              router.replace('/login');
+            } catch (error) {
+              console.error('❌ Erro no logout:', error);
+              Alert.alert('Erro', 'Não foi possível fazer logout');
+            }
+          }
+        }
+      ]
+    );
   };
 
   const hasAlmoxarifePermission = () => {
@@ -58,13 +84,13 @@ export default function HomeScreen() {
   };
 
   const navigateTo = (screen: keyof RootStackParamList) => {
-    // Verifica acesso para Expedição e Conferência
+    console.log(`🔍 Navegando para: ${screen}, Grupo: ${userGroup}`);
+    
     if ((screen === 'expedicao' || screen === 'conferenciaList') && !hasExpedicaoPermission()) {
       Alert.alert('Acesso negado', 'Somente usuários autorizados podem acessar esta funcionalidade');
       return;
     }
     
-    // Verifica acesso para Almoxarife e Romaneio
     if ((screen === 'almoxarife' || screen === 'recebimento') && !hasAlmoxarifePermission()) {
       Alert.alert('Acesso negado', 'Somente usuários autorizados podem acessar esta funcionalidade');
       return;
@@ -84,7 +110,6 @@ export default function HomeScreen() {
 
   return (
     <View style={styles.container}>
-      {/* Header */}
       <View style={styles.header}>
         <Image
           alt="Logo"
@@ -95,14 +120,12 @@ export default function HomeScreen() {
           <TouchableOpacity onPress={handleLogout} style={styles.logoutButton}>
             <Ionicons name="exit-outline" size={24} color="white" />
           </TouchableOpacity>
-           <Text style={styles.welcomeText}>{session.username}</Text>
+          <Text style={styles.welcomeText}>{session.username}</Text>
         </View>
       </View>
 
-      {/* Conteúdo principal com scroll */}
       <ScrollView style={styles.scrollView} contentContainerStyle={styles.scrollContent}>
         
-        {/* Seção Logística */}
         <View style={styles.section}>
           <View style={styles.sectionHeader}>
             <View style={[styles.sectionIconContainer, { backgroundColor: '#FF9800' }]}>
@@ -135,7 +158,6 @@ export default function HomeScreen() {
           </View>
         </View>
 
-        {/* Seção Almoxarife */}
         <View style={styles.section}>
           <View style={styles.sectionHeader}>
             <View style={[styles.sectionIconContainer, { backgroundColor: '#4CAF50' }]}>
@@ -170,8 +192,7 @@ export default function HomeScreen() {
         
         <View style={styles.footer}>
           <Text style={styles.footerText}>Sistema de Gestão</Text>
-          {/* <Text style={styles.footerText}>By: Hugo Rodrigues</Text> */}
-           <Text style={styles.footerText}>Copyright © Labotrat {currentYear}</Text>
+          <Text style={styles.footerText}>Copyright © Labotrat {currentYear}</Text>
         </View>
       </ScrollView>
     </View>
@@ -217,20 +238,6 @@ const styles = StyleSheet.create({
     flexDirection: 'column',
     alignItems: 'flex-end',
     marginRight: 20,
-  },
-  userBadge: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: 'rgba(255, 255, 255, 0.2)',
-    borderRadius: 15,
-    paddingHorizontal: 10,
-    paddingVertical: 5,
-    marginRight: 10,
-  },
-  userName: {
-    fontSize: 14,
-    color: 'white',
-    marginLeft: 5,
   },
   logoutButton: {
     padding: 5,
