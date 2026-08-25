@@ -215,7 +215,7 @@ export default function LoginScreen() {
       </TouchableOpacity>
 
       <View style={styles.footer}>
-        <Text style={styles.footerText}>Versão 1.0.2</Text>
+        <Text style={styles.footerText}>Versão 2.0.2</Text>
       </View>
     </SafeAreaView>
   );

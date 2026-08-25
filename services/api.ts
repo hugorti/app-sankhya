@@ -1051,6 +1051,9 @@ export const query = async (serviceName: string, requestBody: string): Promise<a
   }
 };
 
+// ==================== SEPARAÇÃO ====================
+
+
 // ==================== HELPERS ====================
 
 function escapeXml(unsafe: string): string {
