@@ -90,12 +90,6 @@ export default function HomeScreen() {
       Alert.alert('Acesso negado', 'Somente usuários autorizados podem acessar esta funcionalidade');
       return;
     }
-    
-    if ((screen === 'almoxarife' || screen === 'recebimento') && !hasAlmoxarifePermission()) {
-      Alert.alert('Acesso negado', 'Somente usuários autorizados podem acessar esta funcionalidade');
-      return;
-    }
-    
     router.push(`/${screen}`);
   };
 
@@ -158,38 +152,6 @@ export default function HomeScreen() {
           </View>
         </View>
 
-        <View style={styles.section}>
-          <View style={styles.sectionHeader}>
-            <View style={[styles.sectionIconContainer, { backgroundColor: '#4CAF50' }]}>
-              <Ionicons name="archive-outline" size={24} color="white" />
-            </View>
-            <Text style={styles.sectionTitle}>Almoxarife</Text>
-          </View>
-          <View style={styles.cardsContainer}>
-            <TouchableOpacity 
-              style={styles.cardWrapper}
-              onPress={() => navigateTo('almoxarife')}
-            >
-              <View style={[styles.card, { backgroundColor: '#4CAF50' }]}>
-                <Ionicons name="archive-outline" size={36} color="white" />
-                <Text style={styles.cardText}>Separação</Text>
-                <Text style={styles.cardSubtext}>Controle de estoque</Text>
-              </View>
-            </TouchableOpacity>
-
-            <TouchableOpacity 
-              style={styles.cardWrapper}
-              onPress={() => navigateTo('recebimento')}
-            >
-              <View style={[styles.card, { backgroundColor: '#9C27B0' }]}>
-                <Ionicons name="document-text-outline" size={36} color="white" />
-                <Text style={styles.cardText}>Recebimento</Text>
-                <Text style={styles.cardSubtext}>Entrada de produtos</Text>
-              </View>
-            </TouchableOpacity>
-          </View>
-        </View>
-        
         <View style={styles.footer}>
           <Text style={styles.footerText}>Sistema de Gestão</Text>
           <Text style={styles.footerText}>Copyright © Labotrat {currentYear}</Text>

@@ -11,8 +11,6 @@ export type RootStackParamList = {
     ordemCarga: number;
     nunota: string;
   };
-  almoxarife: undefined;
-  recebimento: undefined;
 };
 
 declare global {
