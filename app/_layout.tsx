@@ -1,35 +1,15 @@
 // app/_layout.tsx
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
-import { Stack, useRouter } from 'expo-router';
+import { Stack } from 'expo-router';
 import { useSession } from '../hooks/useSession';
 import { ActivityIndicator, View, StyleSheet } from 'react-native';
-import { useEffect } from 'react';
 
 export default function RootLayout() {
-  const { session, loading, isAuthenticated } = useSession();
-  const router = useRouter();
+  const { loading } = useSession();
 
-  // Redirecionar baseado no estado de autenticação
-  useEffect(() => {
-    if (!loading) {
-      console.log('🔄 Estado atual:', { 
-        hasSession: !!session, 
-        isAuthenticated, 
-        loading 
-      });
-      
-      if (session && isAuthenticated) {
-        console.log('➡️ Redirecionando para (tabs)');
-        router.replace('/(tabs)');
-      } else {
-        console.log('➡️ Redirecionando para login');
-        router.replace('/login');
-      }
-    }
-  }, [loading, session, isAuthenticated]);
-
+  // ⏳ Só mostra loading enquanto a sessão inicial está sendo carregada do AsyncStorage.
+  // NÃO redireciona aqui — o login.tsx e o (tabs)/index.tsx cuidam disso.
   if (loading) {
-    console.log('⏳ Mostrando loading...');
     return (
       <View style={styles.loadingContainer}>
         <ActivityIndicator size="large" color="#7E469B" />
@@ -37,7 +17,6 @@ export default function RootLayout() {
     );
   }
 
-  console.log('📱 Renderizando Stack Navigator');
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>
       <Stack screenOptions={{ headerShown: false }}>

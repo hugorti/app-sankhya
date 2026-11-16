@@ -1,21 +1,20 @@
 // app/login.tsx
 import { useState, useEffect } from 'react';
-import { 
-  View, 
-  TextInput, 
-  StyleSheet, 
-  Text, 
-  ActivityIndicator, 
-  Alert, 
-  TouchableOpacity, 
-  SafeAreaView, 
-  Image
+import {
+  View,
+  TextInput,
+  StyleSheet,
+  Text,
+  ActivityIndicator,
+  Alert,
+  TouchableOpacity,
+  SafeAreaView,
+  Image,
 } from 'react-native';
 import { useRouter } from 'expo-router';
 import { useSession } from '../hooks/useSession';
 import { MaterialIcons } from '@expo/vector-icons';
 import ServerConfigModal from '../components/ServerConfigModal';
-import { setBaseURL } from '../services/api';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 export default function LoginScreen() {
@@ -29,12 +28,12 @@ export default function LoginScreen() {
 
   // Se já estiver autenticado, redirecionar
   useEffect(() => {
-    console.log('🔍 LoginScreen - Verificando autenticação:', { 
-      isAuthenticated, 
+    console.log('🔍 LoginScreen - Verificando autenticação:', {
+      isAuthenticated,
       hasSession: !!session,
-      username: session?.username 
+      username: session?.username,
     });
-    
+
     if (isAuthenticated && session) {
       console.log('➡️ LoginScreen - Redirecionando para (tabs)');
       router.replace('/(tabs)');
@@ -84,13 +83,13 @@ export default function LoginScreen() {
     }
   };
 
-  const handleSaveServerConfig = async (ipPort: string) => {
-    try {
-      await setBaseURL(ipPort);
-      Alert.alert('Sucesso', 'Configuração do servidor atualizada com sucesso!');
-    } catch (error: any) {
-      Alert.alert('Erro', error.message || 'Não foi possível configurar o servidor');
-    }
+  const handleSaveServerConfig = async () => {
+    // O modal já aplica a troca via setEnvironment().
+    // Aqui só informamos o usuário que precisa relogar.
+    Alert.alert(
+      'Ambiente atualizado',
+      'Faça login novamente para usar o novo ambiente.'
+    );
   };
 
   const showValidationError = () => {
@@ -102,10 +101,8 @@ export default function LoginScreen() {
     } else {
       message += 'a senha';
     }
-    
-    Alert.alert('Campos obrigatórios', message, [
-      { text: 'OK', style: 'default' }
-    ]);
+
+    Alert.alert('Campos obrigatórios', message, [{ text: 'OK', style: 'default' }]);
   };
 
   const handleLoginError = (error: Error) => {
@@ -120,11 +117,7 @@ export default function LoginScreen() {
       errorMessage += '• Usuário ou senha incorreto';
     }
 
-    Alert.alert(
-      'Erro no Login',
-      errorMessage,
-      [{ text: 'OK', style: 'cancel' }]
-    );
+    Alert.alert('Erro no Login', errorMessage, [{ text: 'OK', style: 'cancel' }]);
   };
 
   const toggleSecureEntry = () => {
@@ -138,7 +131,7 @@ export default function LoginScreen() {
         onClose={() => setConfigModalVisible(false)}
         onSave={handleSaveServerConfig}
       />
-      
+
       <View style={styles.logoContainer}>
         <Image
           alt="Logo"
@@ -147,7 +140,7 @@ export default function LoginScreen() {
         />
         <Text style={styles.subtitle}>Sistema de Gestão</Text>
       </View>
-      
+
       <View style={styles.inputContainer}>
         <View style={styles.inputWrapper}>
           <MaterialIcons name="person" size={24} color="#9c27b0" style={styles.icon} />
@@ -164,7 +157,7 @@ export default function LoginScreen() {
           />
         </View>
       </View>
-      
+
       <View style={styles.inputContainer}>
         <View style={styles.inputWrapper}>
           <MaterialIcons name="lock" size={24} color="#9c27b0" style={styles.icon} />
@@ -180,20 +173,20 @@ export default function LoginScreen() {
             selectionColor="#9c27b0"
           />
           <TouchableOpacity onPress={toggleSecureEntry} style={styles.eyeButton}>
-            <MaterialIcons 
-              name={secureTextEntry ? 'visibility-off' : 'visibility'} 
-              size={24} 
-              color="#9c27b0" 
+            <MaterialIcons
+              name={secureTextEntry ? 'visibility-off' : 'visibility'}
+              size={24}
+              color="#9c27b0"
             />
           </TouchableOpacity>
         </View>
       </View>
 
-      <TouchableOpacity 
+      <TouchableOpacity
         style={[
-          styles.button, 
+          styles.button,
           !isFormValid && styles.buttonDisabled,
-          loading && styles.buttonLoading
+          loading && styles.buttonLoading,
         ]}
         onPress={handleLogin}
         disabled={!isFormValid || loading}
@@ -206,7 +199,7 @@ export default function LoginScreen() {
         )}
       </TouchableOpacity>
 
-      <TouchableOpacity 
+      <TouchableOpacity
         style={styles.configButton}
         onPress={() => setConfigModalVisible(true)}
       >
