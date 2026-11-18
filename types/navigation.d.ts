@@ -5,6 +5,7 @@ export type RootStackParamList = {
   login: undefined;
   '(tabs)': undefined;
   expedicao: undefined;
+  separacao: undefined;
   conferenciaList: {
     nuseparacao: number;
     totalVolumes: number;

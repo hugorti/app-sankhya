@@ -22,14 +22,14 @@ export default function HomeScreen() {
         setLoading(false);
         return;
       }
-      
+
       console.log(`📍 URL em uso: ${getCurrentApiURL()}`);
       console.log(`👤 Buscando grupo para: ${session.username}`);
-      
+
       try {
         const group = await buscarGrupoUsuario(session.username);
         setUserGroup(group);
-        
+
         if (group !== null) {
           console.log(`✅ Grupo do usuário ${session.username}: ${group}`);
         } else {
@@ -42,7 +42,7 @@ export default function HomeScreen() {
         setLoading(false);
       }
     };
-    
+
     fetchUserGroup();
   }, [session]);
 
@@ -52,8 +52,8 @@ export default function HomeScreen() {
       'Deseja realmente sair?',
       [
         { text: 'Cancelar', style: 'cancel' },
-        { 
-          text: 'Sair', 
+        {
+          text: 'Sair',
           style: 'destructive',
           onPress: async () => {
             try {
@@ -71,12 +71,6 @@ export default function HomeScreen() {
     );
   };
 
-  const hasAlmoxarifePermission = () => {
-    if (!userGroup) return false;
-    const allowedGroups = [1, 7, 9, 17, 18, 21, 23];
-    return allowedGroups.includes(userGroup);
-  };
-
   const hasExpedicaoPermission = () => {
     if (!userGroup) return false;
     const allowedGroups = [1, 6];
@@ -85,9 +79,9 @@ export default function HomeScreen() {
 
   const navigateTo = (screen: keyof RootStackParamList) => {
     console.log(`🔍 Navegando para: ${screen}, Grupo: ${userGroup}`);
-    
-    if ((screen === 'expedicao' || screen === 'conferenciaList') && !hasExpedicaoPermission()) {
-      Alert.alert('Acesso negado', 'Somente usuários autorizados podem acessar esta funcionalidade');
+
+    if ((screen === 'expedicao' || screen === 'conferenciaList' || screen === 'separacao') && !hasExpedicaoPermission()) {
+      Alert.alert('Acesso negado', '...');
       return;
     }
     router.push(`/${screen}`);
@@ -119,7 +113,7 @@ export default function HomeScreen() {
       </View>
 
       <ScrollView style={styles.scrollView} contentContainerStyle={styles.scrollContent}>
-        
+
         <View style={styles.section}>
           <View style={styles.sectionHeader}>
             <View style={[styles.sectionIconContainer, { backgroundColor: '#FF9800' }]}>
@@ -127,8 +121,10 @@ export default function HomeScreen() {
             </View>
             <Text style={styles.sectionTitle}>Logística</Text>
           </View>
+
+          {/* Linha 1: Expedição + Conferência lado a lado */}
           <View style={styles.cardsContainer}>
-            <TouchableOpacity 
+            <TouchableOpacity
               style={styles.cardWrapper}
               onPress={() => navigateTo('expedicao')}
             >
@@ -139,7 +135,7 @@ export default function HomeScreen() {
               </View>
             </TouchableOpacity>
 
-            <TouchableOpacity 
+            <TouchableOpacity
               style={styles.cardWrapper}
               onPress={() => navigateTo('conferenciaList')}
             >
@@ -147,6 +143,20 @@ export default function HomeScreen() {
                 <Ionicons name="checkmark-done-outline" size={36} color="white" />
                 <Text style={styles.cardText}>Conferência</Text>
                 <Text style={styles.cardSubtext}>Verificar produtos</Text>
+              </View>
+            </TouchableOpacity>
+          </View>
+
+          {/* Linha 2: Separação — mesmo tamanho dos outros, em linha própria */}
+          <View style={styles.cardsContainer}>
+            <TouchableOpacity
+              style={styles.cardWrapper}
+              onPress={() => navigateTo('separacao')}
+            >
+              <View style={[styles.card, { backgroundColor: '#9C27B0' }]}>
+                <Ionicons name="list-outline" size={36} color="white" />
+                <Text style={styles.cardText}>Separação</Text>
+                <Text style={styles.cardSubtext}>Minhas tarefas</Text>
               </View>
             </TouchableOpacity>
           </View>

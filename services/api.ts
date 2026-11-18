@@ -25,7 +25,7 @@ export const ENVIRONMENTS: Record<EnvironmentType, EnvironmentConfig> = {
     AUTH_URL: 'https://api.sandbox.sankhya.com.br/authenticate',
     CLIENT_ID: '25a5c6d7-a3f1-4149-866b-f06b4d23cd00',
     CLIENT_SECRET: '9aVXcCy6rtB0LMZb35rSQaDG1sMjkAI0',
-    X_TOKEN: 'bca825bd-d9df-44a5-9881-ee76a8b02bd7',
+    X_TOKEN: '742ed59c-fb1d-47c6-965e-d250a438556d',
   },
   PRODUCTION: {
     name: 'Ambiente Produção',
@@ -834,6 +834,108 @@ export const query = async (serviceName: string, requestBody: string): Promise<a
   }
   return result.serviceResponse.responseBody;
 };
+
+// ==================== SEPARAÇÃO (NOVO) ====================
+
+export interface ItemSeparacao {
+  NUTAREFA: number;
+  CODPROD: number;
+  REFERENCIA: string;
+  DESCRPROD: string;
+  LOTE: string;
+  CODENDORIGEM: number;
+  ENDERECO: string;
+  UNIDADE_ESTOQUE: string;
+  ESTOQUE: number;
+  SAIDASPEND: number;
+  CODBARRA: string;
+  QTD_POR_CAIXA: number;
+  QTD_BIPAR: number;
+  BLOQUEADO: number;
+}
+
+export interface ValidacaoEstoque {
+  podeSeparar: boolean;
+  itens: ItemSeparacao[];
+  bloqueados: ItemSeparacao[];
+}
+
+const SQL_ITENS_SEPARACAO = (nutarefa: number) => `
+  SELECT
+      ITT.NUTAREFA,
+      ITT.CODPROD,
+      ISNULL(P.REFERENCIA, '')   AS PRODUTO_REFERENCIA,
+      ISNULL(P.DESCRPROD, '')    AS DESCRPROD,
+      ITT.CONTROLE               AS LOTE,
+      ITT.CODENDORIGEM,
+      ISNULL(ENDORIG.ENDERECO, '') AS ENDERECO,
+      ISNULL(EST.CODVOL, '')     AS UNIDADE_ESTOQUE,
+      ISNULL(EST.ESTOQUE, 0)     AS ESTOQUE,
+      ISNULL(EST.SAIDASPEND, 0)  AS SAIDASPEND,
+      ISNULL(VOA.CODBARRA, '')   AS CODBARRA,
+      ISNULL(VOA.QUANTIDADE, 1)  AS QTD_POR_CAIXA,
+      CASE
+          WHEN ISNULL(EST.SAIDASPEND, 0) <= 0 THEN 0
+          WHEN EST.CODVOL = 'CX' THEN EST.SAIDASPEND
+          WHEN EST.CODVOL = 'UN' AND ISNULL(VOA.QUANTIDADE, 0) > 0
+              THEN CAST(EST.SAIDASPEND AS DECIMAL(10,2)) / VOA.QUANTIDADE
+          ELSE EST.SAIDASPEND
+      END AS QTD_BIPAR,
+      CASE
+          WHEN EST.CODEND IS NULL THEN 1
+          WHEN ISNULL(EST.SAIDASPEND, 0) > ISNULL(EST.ESTOQUE, 0) THEN 1
+          ELSE 0
+      END AS BLOQUEADO
+  FROM SANKHYA.TGWITT ITT
+  LEFT JOIN SANKHYA.TGWEST EST
+      ON EST.CODEND   = ITT.CODENDORIGEM
+     AND EST.CODPROD  = ITT.CODPROD
+     AND EST.CONTROLE = ITT.CONTROLE
+  LEFT JOIN SANKHYA.TGFPRO P
+      ON P.CODPROD = ITT.CODPROD
+  LEFT JOIN SANKHYA.TGWEND ENDORIG
+      ON ENDORIG.CODEND = ITT.CODENDORIGEM
+  LEFT JOIN SANKHYA.TGFVOA VOA
+      ON VOA.CODPROD = EST.CODPROD
+     AND VOA.CODVOL  = 'CX'
+  WHERE ITT.NUTAREFA = ${Number(nutarefa)}
+  ORDER BY ITT.CODPROD, ITT.CONTROLE
+`;
+
+export async function carregarItensSeparacao(
+  nutarefa: number
+): Promise<ValidacaoEstoque> {
+  const result = await queryJson('DbExplorerSP.executeQuery', {
+    sql: SQL_ITENS_SEPARACAO(nutarefa),
+  });
+
+  const rows: any[] = result?.rows ?? [];
+
+  const itens: ItemSeparacao[] = rows.map((row) => ({
+    NUTAREFA: Number(row[0]) || 0,
+    CODPROD: Number(row[1]) || 0,
+    REFERENCIA: row[2] || '',
+    DESCRPROD: row[3] || '',
+    LOTE: row[4] || '',
+    CODENDORIGEM: Number(row[5]) || 0,
+    ENDERECO: row[6] || '',
+    UNIDADE_ESTOQUE: row[7] || '',
+    ESTOQUE: Number(row[8]) || 0,
+    SAIDASPEND: Number(row[9]) || 0,
+    CODBARRA: row[10] || '',
+    QTD_POR_CAIXA: Number(row[11]) || 1,
+    QTD_BIPAR: Number(row[12]) || 0,
+    BLOQUEADO: Number(row[13]) || 0,
+  }));
+
+  const bloqueados = itens.filter((i) => i.BLOQUEADO === 1);
+
+  return {
+    podeSeparar: bloqueados.length === 0,
+    itens,
+    bloqueados,
+  };
+}
 
 // ==================== HELPERS ====================
 
