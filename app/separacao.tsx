@@ -5,15 +5,17 @@ import {
   Text,
   StyleSheet,
   ActivityIndicator,
-  TextInput,
   TouchableOpacity,
-  FlatList,
   Alert,
 } from 'react-native';
 
 import { useState, useEffect, useCallback } from 'react';
 import { useRouter } from 'expo-router';
-import { queryJson, registerUserActivity, carregarItensSeparacao } from '@/services/api';
+import {
+  queryJson,
+  registerUserActivity,
+  verificarTarefasConcluidas,
+} from '@/services/api';
 import { useSession } from '@/hooks/useSession';
 import { Ionicons } from '@expo/vector-icons';
 
@@ -33,17 +35,203 @@ interface DadosSeparacao {
   COD_SITUACAO: number;
   CODUSU: number | null;
   NOMEUSU: string;
+  CONCLUIDA: boolean;
 }
+
+interface TarefaElegivel {
+  tarefa: DadosSeparacao;
+  prioridade: number; // 1 = em andamento (usuário), 2 = não iniciada (usuário), 3 = sem vínculo
+  temEstoque: boolean;
+  bloqueios: {
+    REFERENCIA: string;
+    LOTE: string;
+    ESTOQUE: number;
+    SAIDASPEND: number;
+  }[];
+}
+
+const SQL_VALIDACAO_ESTOQUE = (nutarefa: number) => `
+  SELECT
+      ITT.NUTAREFA,
+      ISNULL(TSEP.NUNOTA, 0)                 AS NUNOTA,
+      ISNULL(TSEP.ORDEMCARGA, 0)             AS OC,
+      ISNULL(TSEP.NUSEPARACAO, 0)            AS NUSEPARACAO,
+      ITT.CODPROD,
+      ISNULL(P.DESCRPROD, '')                AS DESCRPROD,
+      ISNULL(P.REFERENCIA, '')               AS REFERENCIA,
+      ITT.CONTROLE                           AS LOTE,
+      ITT.CODENDORIGEM,
+      ISNULL(ENDORIG.ENDERECO, '')           AS ENDERECO,
+      ISNULL(EST.CODVOL, '')                 AS UNIDADE_ESTOQUE,
+      ISNULL(EST.ESTOQUE, 0)                 AS ESTOQUE,
+      ISNULL(EST.SAIDASPEND, 0)              AS SAIDASPEND,
+      ISNULL(VOA.CODBARRA, '')               AS CODBARRA,
+      ISNULL(VOA.QUANTIDADE, 1)              AS QTD_POR_CAIXA,
+      CASE
+          WHEN ISNULL(EST.SAIDASPEND, 0) <= 0 THEN 0
+          WHEN EST.CODVOL = 'CX' THEN EST.SAIDASPEND
+          WHEN EST.CODVOL = 'UN' AND ISNULL(VOA.QUANTIDADE, 0) > 0
+              THEN CAST(EST.SAIDASPEND AS DECIMAL(10,2)) / VOA.QUANTIDADE
+          ELSE EST.SAIDASPEND
+      END AS QTD_BIPAR,
+      CASE
+          WHEN EST.CODEND IS NULL THEN 1
+          WHEN ISNULL(EST.SAIDASPEND, 0) > ISNULL(EST.ESTOQUE, 0) THEN 1
+          ELSE 0
+      END AS BLOQUEADO
+  FROM SANKHYA.TGWITT ITT
+  INNER JOIN SANKHYA.TGWSEP TSEP
+      ON TSEP.NUTAREFA = ITT.NUTAREFA
+  LEFT JOIN SANKHYA.TGWEST EST
+      ON EST.CODEND   = ITT.CODENDORIGEM
+     AND EST.CODPROD  = ITT.CODPROD
+     AND EST.CONTROLE = ITT.CONTROLE
+  LEFT JOIN SANKHYA.TGFPRO P
+      ON P.CODPROD = ITT.CODPROD
+  LEFT JOIN SANKHYA.TGWEND ENDORIG
+      ON ENDORIG.CODEND = ITT.CODENDORIGEM
+  LEFT JOIN SANKHYA.TGFVOA VOA
+      ON VOA.CODPROD = ITT.CODPROD
+     AND VOA.CODVOL  = 'CX'
+  WHERE ITT.NUTAREFA = ${Number(nutarefa)}
+  ORDER BY ITT.CODPROD, ITT.CONTROLE
+`;
+
+const SQL_LISTA_SEPARACOES = (usuarioLogado: string) => `
+  WITH ESTOQUE_AGRUPADO AS (
+      SELECT
+          CODEND,
+          CODPROD,
+          CONTROLE,
+          SUM(ESTOQUEVOLPAD) AS ESTOQUEVOLPAD
+      FROM SANKHYA.TGWEST
+      GROUP BY
+          CODEND,
+          CODPROD,
+          CONTROLE
+  ),
+  BASE AS (
+      SELECT
+          TSEP.NUNOTA,
+          ITT.NUTAREFA,
+          TSEP.ORDEMCARGA AS OC,
+
+          ITT.CODPROD,
+          P.DESCRPROD,
+          ITT.CONTROLE,
+
+          ITT.CODENDORIGEM,
+          ENDORIG.ENDERECO AS ENDORIG,
+
+          ITT.CODENDDESTINO,
+          ENDDEST.ENDERECO AS ENDDESTINO,
+
+          ITT.QTDORIG AS QUANTIDADE,
+          ITT.CODVOLORIG,
+
+          ISNULL(EST.ESTOQUEVOLPAD, 0) AS ESTOQUEVOLPAD,
+
+          CASE
+              WHEN V.QUANTIDADE IS NULL OR V.QUANTIDADE = 0
+                  THEN 0
+              ELSE CAST(
+                  ISNULL(EST.ESTOQUEVOLPAD, 0) / V.QUANTIDADE
+                  AS DECIMAL(10,2)
+              )
+          END AS QTD_CAIXAS,
+
+          TSEP.NUSEPARACAO,
+
+          ITT.CODUSUEXEC AS CODUSU,
+          USUEXEC.NOMEUSU,
+
+          TSEP.SITUACAO AS COD_SITUACAO,
+
+          ROW_NUMBER() OVER (
+              PARTITION BY ITT.NUTAREFA
+              ORDER BY ITT.NUTAREFA DESC
+          ) AS RN
+
+      FROM SANKHYA.TGWITT ITT
+
+      INNER JOIN SANKHYA.TGWSEP TSEP
+          ON TSEP.NUTAREFA = ITT.NUTAREFA
+
+      LEFT JOIN SANKHYA.TGWEND ENDORIG
+          ON ENDORIG.CODEND = ITT.CODENDORIGEM
+
+      INNER JOIN SANKHYA.TGWEND ENDDEST
+          ON ENDDEST.CODEND = ITT.CODENDDESTINO
+
+      LEFT JOIN ESTOQUE_AGRUPADO EST
+          ON EST.CODEND = ITT.CODENDDESTINO
+         AND EST.CODPROD = ITT.CODPROD
+         AND EST.CONTROLE = ITT.CONTROLE
+
+      LEFT JOIN SANKHYA.TGFPRO P
+          ON P.CODPROD = ITT.CODPROD
+
+      LEFT JOIN SANKHYA.TGFVOA V
+          ON V.CODPROD = ITT.CODPROD
+         AND V.CODVOL = 'CX'
+
+      LEFT JOIN SANKHYA.TSIUSU USUEXEC
+          ON USUEXEC.CODUSU = ITT.CODUSUEXEC
+
+      WHERE
+          SUBSTRING(ENDDEST.ENDERECO, 1, 5) = '03.70'
+          AND TSEP.NUNOTA IS NOT NULL
+          AND TSEP.SITUACAO IN (1, 2)
+          AND ITT.SITUACAO IN ('A', 'E')
+          AND (
+              ITT.CODUSUEXEC = (
+                  SELECT CODUSU
+                  FROM SANKHYA.TSIUSU
+                  WHERE NOMEUSU = '${usuarioLogado}'
+              )
+              OR ITT.CODUSUEXEC IS NULL
+          )
+  )
+  SELECT
+      NUTAREFA,
+      NUNOTA,
+      OC,
+      CODPROD,
+      DESCRPROD,
+      CONTROLE,
+      CODENDORIGEM,
+      ENDORIG,
+      CODENDDESTINO,
+      ENDDESTINO,
+      QUANTIDADE,
+      CODVOLORIG,
+      ESTOQUEVOLPAD,
+      QTD_CAIXAS,
+      NUSEPARACAO,
+      CODUSU,
+      NOMEUSU,
+      COD_SITUACAO
+  FROM BASE
+  WHERE RN = 1
+  ORDER BY
+      CASE
+          WHEN CODUSU = (
+              SELECT CODUSU
+              FROM SANKHYA.TSIUSU
+              WHERE NOMEUSU = '${usuarioLogado}'
+          ) THEN 0
+          ELSE 1
+      END,
+      NUTAREFA DESC
+`;
 
 export default function SeparacaoScreen() {
   const { session } = useSession();
   const router = useRouter();
 
-  const [dados, setDados] = useState<DadosSeparacao[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [searchTerm, setSearchTerm] = useState('');
-  const [validando, setValidando] = useState<number | null>(null);
+  const [semTarefasElegiveis, setSemTarefasElegiveis] = useState(false);
 
   const buscarSeparacoes = useCallback(async () => {
     if (!session?.jsessionid || !session?.username) {
@@ -55,163 +243,21 @@ export default function SeparacaoScreen() {
     try {
       setLoading(true);
       setError(null);
-      setDados([]);
+      setSemTarefasElegiveis(false);
 
       const usuarioLogado = session.username.replace(/'/g, "''");
 
-      const sqlQuery = `
-        WITH ESTOQUE_AGRUPADO AS (
-            SELECT
-                CODEND,
-                CODPROD,
-                CONTROLE,
-                SUM(ESTOQUEVOLPAD) AS ESTOQUEVOLPAD
-            FROM SANKHYA.TGWEST
-            GROUP BY
-                CODEND,
-                CODPROD,
-                CONTROLE
-        ),
-        BASE AS (
-            SELECT
-                TSEP.NUNOTA,
-                ITT.NUTAREFA,
-                TSEP.ORDEMCARGA AS OC,
-
-                ITT.CODPROD,
-                P.DESCRPROD,
-                ITT.CONTROLE,
-
-                ITT.CODENDORIGEM,
-                ENDORIG.ENDERECO AS ENDORIG,
-
-                ITT.CODENDDESTINO,
-                ENDDEST.ENDERECO AS ENDDESTINO,
-
-                ITT.QTDORIG AS QUANTIDADE,
-                ITT.CODVOLORIG,
-
-                ISNULL(EST.ESTOQUEVOLPAD, 0) AS ESTOQUEVOLPAD,
-
-                CASE
-                    WHEN V.QUANTIDADE IS NULL OR V.QUANTIDADE = 0
-                        THEN 0
-                    ELSE CAST(
-                        ISNULL(EST.ESTOQUEVOLPAD, 0) / V.QUANTIDADE
-                        AS DECIMAL(10,2)
-                    )
-                END AS QTD_CAIXAS,
-
-                TSEP.NUSEPARACAO,
-
-                ITT.CODUSUEXEC AS CODUSU,
-                USUEXEC.NOMEUSU,
-
-                TSEP.SITUACAO AS COD_SITUACAO,
-
-                CASE
-                    WHEN ISNULL(TSEP.SITUACAO, -1) = -1
-                        THEN 'Não enviado'
-                    WHEN TSEP.SITUACAO = 1
-                        THEN 'Enviado para separação'
-                    WHEN TSEP.SITUACAO = 2
-                        THEN 'Em processo de separação'
-                    WHEN TSEP.SITUACAO = 3
-                        THEN 'Aguardando conferência'
-                    WHEN TSEP.SITUACAO = 9
-                        THEN 'Conferência validada'
-                    WHEN TSEP.SITUACAO = 16
-                        THEN 'Concluído'
-                    ELSE
-                        'Situação desconhecida (' +
-                        CAST(TSEP.SITUACAO AS VARCHAR(10)) + ')'
-                END AS SITUACAOWMS,
-
-                ROW_NUMBER() OVER (
-                    PARTITION BY ITT.NUTAREFA
-                    ORDER BY ITT.NUTAREFA DESC
-                ) AS RN
-
-            FROM SANKHYA.TGWITT ITT
-
-            INNER JOIN SANKHYA.TGWSEP TSEP
-                ON TSEP.NUTAREFA = ITT.NUTAREFA
-
-            LEFT JOIN SANKHYA.TGWEND ENDORIG
-                ON ENDORIG.CODEND = ITT.CODENDORIGEM
-
-            INNER JOIN SANKHYA.TGWEND ENDDEST
-                ON ENDDEST.CODEND = ITT.CODENDDESTINO
-
-            LEFT JOIN ESTOQUE_AGRUPADO EST
-                ON EST.CODEND = ITT.CODENDDESTINO
-               AND EST.CODPROD = ITT.CODPROD
-               AND EST.CONTROLE = ITT.CONTROLE
-
-            LEFT JOIN SANKHYA.TGFPRO P
-                ON P.CODPROD = ITT.CODPROD
-
-            LEFT JOIN SANKHYA.TGFVOA V
-                ON V.CODPROD = ITT.CODPROD
-               AND V.CODVOL = 'CX'
-
-            LEFT JOIN SANKHYA.TSIUSU USUEXEC
-                ON USUEXEC.CODUSU = ITT.CODUSUEXEC
-
-            WHERE
-                SUBSTRING(ENDDEST.ENDERECO, 1, 5) = '03.70'
-                AND TSEP.NUNOTA IS NOT NULL
-                AND TSEP.SITUACAO IN (1, 2)
-                AND ITT.SITUACAO IN ('A', 'E')
-                AND (
-                    ITT.CODUSUEXEC = (
-                        SELECT CODUSU
-                        FROM SANKHYA.TSIUSU
-                        WHERE NOMEUSU = '${usuarioLogado}'
-                    )
-                    OR ITT.CODUSUEXEC IS NULL
-                )
-        )
-        SELECT
-            NUTAREFA,
-            NUNOTA,
-            OC,
-            CODPROD,
-            DESCRPROD,
-            CONTROLE,
-            CODENDORIGEM,
-            ENDORIG,
-            CODENDDESTINO,
-            ENDDESTINO,
-            QUANTIDADE,
-            CODVOLORIG,
-            ESTOQUEVOLPAD,
-            QTD_CAIXAS,
-            NUSEPARACAO,
-            CODUSU,
-            NOMEUSU,
-            SITUACAOWMS,
-            COD_SITUACAO
-        FROM BASE
-        WHERE RN = 1
-        ORDER BY
-            CASE
-                WHEN CODUSU = (
-                    SELECT CODUSU
-                    FROM SANKHYA.TSIUSU
-                    WHERE NOMEUSU = '${usuarioLogado}'
-                ) THEN 0
-                ELSE 1
-            END,
-            NUTAREFA DESC
-      `;
-
       const result = await queryJson('DbExplorerSP.executeQuery', {
-        sql: sqlQuery,
+        sql: SQL_LISTA_SEPARACOES(usuarioLogado),
       });
 
-      if (result?.rows && result.rows.length > 0) {
-        const separacoes: DadosSeparacao[] = result.rows.map((row: any[]) => ({
+      if (!result?.rows || result.rows.length === 0) {
+        setError('Nenhuma separação encontrada');
+        return;
+      }
+
+      const separacoesBase: DadosSeparacao[] = result.rows.map(
+        (row: any[]) => ({
           NUTAREFA: Number(row[0]) || 0,
           NUNOTA: Number(row[1]) || 0,
           OC: Number(row[2]) || 0,
@@ -226,72 +272,114 @@ export default function SeparacaoScreen() {
           QTD_CAIXAS: Number(row[13]) || 0,
           CODUSU: row[15] === null ? null : Number(row[15]),
           NOMEUSU: row[16] || '',
-          COD_SITUACAO: Number(row[18]) || -1,
-        }));
+          COD_SITUACAO: Number(row[17]) || -1,
+          CONCLUIDA: false,
+        })
+      );
 
-        setDados(separacoes);
-      } else {
-        setDados([]);
-        setError('Nenhuma separação encontrada');
+      // Remove as já concluídas (AD_SEPARACAOWMS)
+      const concluidas = await verificarTarefasConcluidas(
+        separacoesBase.map((s) => s.NUTAREFA)
+      );
+
+      const semConcluidas = separacoesBase
+        .map((s) => ({ ...s, CONCLUIDA: concluidas.has(s.NUTAREFA) }))
+        .filter((s) => !s.CONCLUIDA);
+
+      if (semConcluidas.length === 0) {
+        setError('Todas as separações já foram concluídas');
+        return;
       }
-    } catch (err) {
-      console.error('❌ Erro na consulta:', err);
-      setError(err instanceof Error ? err.message : 'Erro ao buscar separações');
-    } finally {
-      setLoading(false);
-    }
-  }, [session?.jsessionid, session?.username]);
 
-  useEffect(() => {
-    buscarSeparacoes();
-  }, [buscarSeparacoes]);
+      // Priorização:
+      //  1 = em andamento do usuário (SITUACAO 2 + CODUSU = usuário)
+      //  2 = não iniciada do usuário (SITUACAO 1 + CODUSU = usuário)
+      //  3 = sem vínculo com usuário (CODUSU null)
+      const priorizadas: TarefaElegivel[] = semConcluidas
+        .map((tarefa) => {
+          let prioridade = 99;
 
-  const filteredSeparacoes = dados.filter((s) => {
-    const termo = searchTerm.trim().toLowerCase();
-    if (!termo) return true;
-    return (
-      String(s.NUTAREFA).includes(termo) ||
-      String(s.NUNOTA).includes(termo) ||
-      String(s.OC).includes(termo) ||
-      s.DESCRPROD.toLowerCase().includes(termo) ||
-      s.ENDORIG.toLowerCase().includes(termo) ||
-      s.ENDDESTINO.toLowerCase().includes(termo)
-    );
-  });
+          const nomeUsuarioOk =
+            tarefa.CODUSU !== null &&
+            tarefa.NOMEUSU?.toUpperCase() === session.username.toUpperCase();
 
-  const getStatusLabel = (cod: number) => {
-    switch (cod) {
-      case 1: return 'Enviado para separação';
-      case 2: return 'Em processo de separação';
-      case 3: return 'Aguardando conferência';
-      case 9: return 'Conferência validada';
-      case 16: return 'Concluído';
-      default: return 'Não enviado';
-    }
-  };
+          if (tarefa.COD_SITUACAO === 2 && nomeUsuarioOk) {
+            prioridade = 1;
+          } else if (tarefa.COD_SITUACAO === 1 && nomeUsuarioOk) {
+            prioridade = 2;
+          } else if (tarefa.CODUSU === null) {
+            prioridade = 3;
+          }
 
-  const getStatusColor = (cod: number) => {
-    switch (cod) {
-      case 1: return '#2196F3';
-      case 2: return '#FF9800';
-      case 3: return '#9C27B0';
-      case 9: return '#4CAF50';
-      case 16: return '#2E7D32';
-      default: return '#F44336';
-    }
-  };
+          return {
+            tarefa,
+            prioridade,
+            temEstoque: true,
+            bloqueios: [],
+          };
+        })
+        .sort((a, b) => {
+          if (a.prioridade !== b.prioridade) {
+            return a.prioridade - b.prioridade;
+          }
+          return b.tarefa.NUTAREFA - a.tarefa.NUTAREFA;
+        });
 
-  const handlePressCard = async (item: DadosSeparacao) => {
-    registerUserActivity();
+      // Valida estoque na ordem de prioridade
+      let escolhida: TarefaElegivel | null = null;
 
-    if (validando !== null) return;
-    setValidando(item.NUTAREFA);
+      for (const tarefa of priorizadas) {
+        try {
+          const validacao = await queryJson('DbExplorerSP.executeQuery', {
+            sql: SQL_VALIDACAO_ESTOQUE(tarefa.tarefa.NUTAREFA),
+          });
 
-    try {
-      const validacao = await carregarItensSeparacao(item.NUTAREFA);
+          const rows: any[] = validacao?.rows ?? [];
 
-      if (!validacao.podeSeparar) {
-        const itens = validacao.bloqueados
+          const bloqueios = rows
+            .map((row) => ({
+              REFERENCIA: row[6] || '',
+              LOTE: row[7] || '',
+              ESTOQUE: Number(row[11]) || 0,
+              SAIDASPEND: Number(row[12]) || 0,
+              BLOQUEADO: Number(row[16]) || 0,
+            }))
+            .filter((b) => b.BLOQUEADO === 1)
+            .map(({ BLOQUEADO, ...rest }) => rest);
+
+          if (bloqueios.length === 0) {
+            tarefa.temEstoque = true;
+            escolhida = tarefa;
+            break;
+          } else {
+            tarefa.temEstoque = false;
+            tarefa.bloqueios = bloqueios;
+          }
+        } catch (err) {
+          console.error(
+            `❌ Erro na validação de estoque da tarefa ${tarefa.tarefa.NUTAREFA}:`,
+            err
+          );
+          tarefa.temEstoque = false;
+          tarefa.bloqueios = [];
+        }
+      }
+
+      if (escolhida) {
+        router.replace({
+          pathname: '/separacaoItem',
+          params: {
+            nutarefa: String(escolhida.tarefa.NUTAREFA),
+            nunota: String(escolhida.tarefa.NUNOTA),
+            ordemCarga: String(escolhida.tarefa.OC),
+          },
+        });
+        return;
+      }
+
+      const bloqueada = priorizadas.find((t) => !t.temEstoque);
+      if (bloqueada) {
+        const lista = bloqueada.bloqueios
           .slice(0, 5)
           .map(
             (b) =>
@@ -301,226 +389,92 @@ export default function SeparacaoScreen() {
           .join('\n\n');
 
         const extra =
-          validacao.bloqueados.length > 5
-            ? `\n\n...e mais ${validacao.bloqueados.length - 5} item(ns).`
+          bloqueada.bloqueios.length > 5
+            ? `\n\n...e mais ${bloqueada.bloqueios.length - 5} item(ns).`
             : '';
 
         Alert.alert(
           'Estoque insuficiente',
-          `Não é possível efetuar esta separação.\n\n` +
-            `Estoque menor que a saída para:\n\n${itens}${extra}\n\n` +
+          `Não é possível efetuar a separação da tarefa ${bloqueada.tarefa.NUTAREFA}.\n\n` +
+            `Estoque menor que a saída para:\n\n${lista}${extra}\n\n` +
             `Faça um ressuprimento ou ajuste de estoque.`,
-          [{ text: 'Entendi' }]
+          [
+            {
+              text: 'Voltar',
+              onPress: () => router.replace('/(tabs)'),
+            },
+          ]
         );
-        return;
+      } else {
+        setSemTarefasElegiveis(true);
       }
-
-      router.push({
-        pathname: '/separacaoItem',
-        params: {
-          nutarefa: String(item.NUTAREFA),
-          nunota: String(item.NUNOTA),
-          ordemCarga: String(item.OC),
-        },
-      });
     } catch (err) {
-      console.error('❌ Erro na validação de estoque:', err);
-      Alert.alert('Erro', 'Não foi possível validar o estoque. Tente novamente.');
+      console.error('❌ Erro na consulta:', err);
+      setError(
+        err instanceof Error ? err.message : 'Erro ao buscar separações'
+      );
     } finally {
-      setValidando(null);
+      setLoading(false);
     }
-  };
+  }, [session?.jsessionid, session?.username, router]);
 
-  const renderItem = ({ item }: { item: DadosSeparacao }) => {
-    const carregando = validando === item.NUTAREFA;
+  useEffect(() => {
+    buscarSeparacoes();
+  }, [buscarSeparacoes]);
 
-    return (
-      <TouchableOpacity
-        style={[styles.card, carregando && styles.cardCarregando]}
-        activeOpacity={0.8}
-        onPress={() => handlePressCard(item)}
-        disabled={validando !== null}
-      >
-        <View style={styles.cardHeader}>
-          <Text style={styles.cardTitle}>Tarefa: {item.NUTAREFA}</Text>
-          <Text style={styles.cardTitle}>Pedido: {item.NUNOTA}</Text>
-        </View>
-
-        <View style={styles.cardRow}>
-          <Text
-            style={[
-              styles.cardStatus,
-              { backgroundColor: getStatusColor(item.COD_SITUACAO) },
-            ]}
-          >
-            {getStatusLabel(item.COD_SITUACAO)}
-          </Text>
-        </View>
-
-        <View style={styles.cardRow}>
-          <Ionicons name="list-outline" size={18} color="#666" />
-          <Text style={styles.cardLabel}>Ordem Carga:</Text>
-          <Text style={styles.cardValue}>{item.OC}</Text>
-        </View>
-
-        <View style={styles.cardRow}>
-          <Ionicons name="cube-outline" size={18} color="#666" />
-          <Text style={styles.cardLabel}>Produto:</Text>
-          <Text style={styles.cardValue} numberOfLines={1}>
-            {item.CODPROD} - {item.DESCRPROD}
-          </Text>
-        </View>
-
-        <View style={styles.cardRow}>
-          <Ionicons name="barcode-outline" size={18} color="#666" />
-          <Text style={styles.cardLabel}>Controle:</Text>
-          <Text style={styles.cardValue}>{item.CONTROLE}</Text>
-        </View>
-
-        <View style={styles.cardRow}>
-          <Ionicons name="log-out-outline" size={18} color="#E91E63" />
-          <Text style={styles.cardLabel}>End. Origem:</Text>
-          <Text style={styles.cardValue} numberOfLines={1}>
-            {item.ENDORIG || '—'}
-          </Text>
-        </View>
-
-        <View style={styles.cardRow}>
-          <Ionicons name="log-in-outline" size={18} color="#4CAF50" />
-          <Text style={styles.cardLabel}>End. Destino:</Text>
-          <Text style={styles.cardValue} numberOfLines={1}>
-            {item.ENDDESTINO || '—'}
-          </Text>
-        </View>
-
-        <View style={styles.cardRow}>
-          <Ionicons name="cube-outline" size={18} color="#666" />
-          <Text style={styles.cardLabel}>Caixas:</Text>
-          <Text style={styles.volumeValue}>{item.QTD_CAIXAS}</Text>
-        </View>
-
-        <View style={styles.cardFooter}>
-          <Ionicons name="person-circle-outline" size={16} color="#666" />
-          <Text
-            style={[
-              styles.cardConferente,
-              !item.NOMEUSU && styles.cardSemResponsavel,
-            ]}
-          >
-            {item.NOMEUSU || 'SEM RESPONSÁVEL'}
-          </Text>
-          {carregando && (
-            <ActivityIndicator
-              size="small"
-              color="#FF9800"
-              style={{ marginLeft: 8 }}
-            />
-          )}
-        </View>
-      </TouchableOpacity>
-    );
+  const handleVoltar = () => {
+    registerUserActivity();
+    router.replace('/(tabs)');
   };
 
   return (
     <View style={styles.container}>
       <View style={styles.header}>
-        <TouchableOpacity
-          activeOpacity={0.7}
-          onPress={() => {
-            registerUserActivity();
-            router.back();
-          }}
-        >
+        <TouchableOpacity activeOpacity={0.7} onPress={handleVoltar}>
           <Ionicons name="arrow-back" size={24} color="white" />
         </TouchableOpacity>
-
-        <Text style={styles.headerTitle}>Minhas Separações</Text>
-
-        <TouchableOpacity
-          activeOpacity={0.7}
-          onPress={() => {
-            registerUserActivity();
-            buscarSeparacoes();
-          }}
-        >
-          <Ionicons name="refresh" size={23} color="white" />
+        <Text style={styles.headerTitle}>Separação</Text>
+        <TouchableOpacity activeOpacity={0.7} onPress={handleVoltar}>
+          <Ionicons name="home-outline" size={23} color="white" />
         </TouchableOpacity>
-      </View>
-
-      <View style={styles.searchContainer}>
-        <Ionicons name="search" size={20} color="#999" style={styles.searchIcon} />
-        <TextInput
-          style={styles.searchInput}
-          placeholder="Buscar por tarefa, pedido ou endereço"
-          placeholderTextColor="#999"
-          value={searchTerm}
-          onChangeText={(text) => {
-            registerUserActivity();
-            setSearchTerm(text);
-          }}
-          autoCorrect={false}
-          autoCapitalize="none"
-        />
-        {searchTerm.length > 0 && (
-          <TouchableOpacity
-            activeOpacity={0.7}
-            onPress={() => {
-              registerUserActivity();
-              setSearchTerm('');
-            }}
-          >
-            <Ionicons name="close-circle" size={20} color="#999" />
-          </TouchableOpacity>
-        )}
       </View>
 
       {loading ? (
         <View style={styles.loadingContainer}>
           <ActivityIndicator size="large" color="#FF9800" />
-          <Text style={styles.loadingText}>Carregando separações...</Text>
+          <Text style={styles.loadingText}>Buscando próxima tarefa...</Text>
         </View>
       ) : error ? (
         <View style={styles.errorContainer}>
-          <Ionicons name="warning" size={30} color="#D32F2F" />
+          <Ionicons name="warning" size={40} color="#D32F2F" />
           <Text style={styles.errorText}>{error}</Text>
           <TouchableOpacity
             style={styles.retryButton}
             activeOpacity={0.7}
-            onPress={() => {
-              registerUserActivity();
-              buscarSeparacoes();
-            }}
+            onPress={handleVoltar}
           >
-            <Text style={styles.retryButtonText}>Tentar novamente</Text>
+            <Text style={styles.retryButtonText}>Voltar para início</Text>
+          </TouchableOpacity>
+        </View>
+      ) : semTarefasElegiveis ? (
+        <View style={styles.emptyContainer}>
+          <Ionicons name="folder-open-outline" size={48} color="#999" />
+          <Text style={styles.emptyText}>
+            Nenhuma tarefa disponível para separação no momento.
+          </Text>
+          <TouchableOpacity
+            style={styles.retryButton}
+            activeOpacity={0.7}
+            onPress={handleVoltar}
+          >
+            <Text style={styles.retryButtonText}>Voltar para início</Text>
           </TouchableOpacity>
         </View>
       ) : (
-        <FlatList
-          data={filteredSeparacoes}
-          renderItem={renderItem}
-          keyExtractor={(item, index) =>
-            `${item.NUTAREFA}-${item.NUNOTA}-${index}`
-          }
-          extraData={searchTerm}
-          contentContainerStyle={styles.listContent}
-          keyboardShouldPersistTaps="handled"
-          showsVerticalScrollIndicator={true}
-          removeClippedSubviews={false}
-          initialNumToRender={10}
-          maxToRenderPerBatch={10}
-          windowSize={5}
-          ListEmptyComponent={
-            <View style={styles.emptyContainer}>
-              <Ionicons name="folder-open-outline" size={48} color="#999" />
-              <Text style={styles.emptyText}>Nenhuma separação encontrada</Text>
-            </View>
-          }
-          refreshing={loading}
-          onRefresh={() => {
-            registerUserActivity();
-            buscarSeparacoes();
-          }}
-        />
+        <View style={styles.loadingContainer}>
+          <ActivityIndicator size="large" color="#FF9800" />
+          <Text style={styles.loadingText}>Abrindo tarefa...</Text>
+        </View>
       )}
     </View>
   );
@@ -544,30 +498,6 @@ const styles = StyleSheet.create({
     fontSize: 17,
     fontWeight: 'bold',
     color: 'white',
-  },
-  searchContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: 'white',
-    marginHorizontal: 10,
-    marginVertical: 8,
-    borderRadius: 8,
-    paddingHorizontal: 10,
-    paddingVertical: 4,
-    elevation: 2,
-  },
-  searchIcon: {
-    marginRight: 6,
-  },
-  searchInput: {
-    flex: 1,
-    fontSize: 14,
-    color: '#333',
-    paddingVertical: 8,
-  },
-  listContent: {
-    paddingHorizontal: 8,
-    paddingBottom: 20,
   },
   loadingContainer: {
     flex: 1,
@@ -604,88 +534,15 @@ const styles = StyleSheet.create({
     fontSize: 14,
   },
   emptyContainer: {
+    flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
-    padding: 40,
+    padding: 30,
   },
   emptyText: {
     marginTop: 15,
-    color: '#999',
-    fontSize: 14,
+    color: '#666',
+    fontSize: 15,
     textAlign: 'center',
-  },
-  card: {
-    backgroundColor: 'white',
-    padding: 12,
-    marginHorizontal: 4,
-    marginVertical: 5,
-    borderRadius: 8,
-    elevation: 2,
-  },
-  cardCarregando: {
-    opacity: 0.6,
-  },
-  cardHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 5,
-  },
-  cardTitle: {
-    fontSize: 15,
-    fontWeight: 'bold',
-    color: '#333',
-  },
-  cardStatus: {
-    color: 'white',
-    fontSize: 12,
-    fontWeight: 'bold',
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: 4,
-    overflow: 'hidden',
-  },
-  cardRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: 6,
-    minHeight: 22,
-  },
-  cardLabel: {
-    fontSize: 13,
-    color: '#666',
-    marginLeft: 6,
-    width: 98,
-  },
-  cardValue: {
-    fontSize: 13,
-    color: '#333',
-    fontWeight: '500',
-    flex: 1,
-  },
-  volumeValue: {
-    fontSize: 15,
-    color: '#FF9800',
-    fontWeight: 'bold',
-    flex: 1,
-  },
-  cardFooter: {
-    marginTop: 5,
-    paddingTop: 6,
-    borderTopWidth: 1,
-    borderTopColor: '#eee',
-    flexDirection: 'row',
-    justifyContent: 'flex-end',
-    alignItems: 'center',
-  },
-  cardConferente: {
-    fontSize: 11,
-    color: '#666',
-    marginLeft: 4,
-  },
-  cardSemResponsavel: {
-    color: '#E65100',
-    fontWeight: 'bold',
-    fontStyle: 'italic',
   },
 });

@@ -5,7 +5,7 @@ import { useSession } from '../../hooks/useSession';
 import { Ionicons } from '@expo/vector-icons';
 import { RootStackParamList } from '@/types/navigation';
 import { useEffect, useState } from 'react';
-import { buscarGrupoUsuario, getCurrentApiURL } from '@/services/api';
+import { buscarGrupoUsuarioOuDeslogar, getCurrentApiURL } from '@/services/api';
 
 export default function HomeScreen() {
   const router = useRouter();
@@ -27,17 +27,26 @@ export default function HomeScreen() {
       console.log(`👤 Buscando grupo para: ${session.username}`);
 
       try {
-        const group = await buscarGrupoUsuario(session.username);
+        const group = await buscarGrupoUsuarioOuDeslogar(session.username);
         setUserGroup(group);
-
-        if (group !== null) {
-          console.log(`✅ Grupo do usuário ${session.username}: ${group}`);
-        } else {
-          console.warn(`⚠️ Não foi possível encontrar o grupo para ${session.username}`);
-        }
+        console.log(`✅ Grupo do usuário ${session.username}: ${group}`);
       } catch (error) {
-        console.error('❌ Erro ao buscar grupo:', error);
+        // Aqui o helper já executou o logout automaticamente.
+        console.warn('🚪 Sessão encerrada por falta de grupo:', error);
         setUserGroup(null);
+
+        Alert.alert(
+          'Sessão encerrada',
+          error instanceof Error
+            ? error.message
+            : 'Não foi possível identificar o grupo do usuário. Faça login novamente.',
+          [
+            {
+              text: 'OK',
+              onPress: () => router.replace('/login'),
+            },
+          ]
+        );
       } finally {
         setLoading(false);
       }

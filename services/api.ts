@@ -666,6 +666,32 @@ export const buscarGrupoUsuario = async (username: string): Promise<number | nul
   }
 };
 
+/**
+ * Busca o grupo do usuário e, se não encontrar (ou der erro), força logout.
+ * Lança um Error para que a tela possa reagir (redirecionar para login, etc.).
+ */
+export const buscarGrupoUsuarioOuDeslogar = async (
+  username: string
+): Promise<number> => {
+  const grupo = await buscarGrupoUsuario(username);
+
+  if (grupo === null) {
+    console.warn(
+      `🚪 Grupo não encontrado para "${username}". Executando logout automático.`
+    );
+    try {
+      await logout();
+    } catch (err) {
+      console.error('❌ Erro ao executar logout automático:', err);
+    }
+    throw new Error(
+      'Não foi possível identificar o grupo do usuário. Faça login novamente.'
+    );
+  }
+
+  return grupo;
+};
+
 // ==================== OUTRAS FUNÇÕES ====================
 
 export const salvarConferenciaAPI = async (data: {
@@ -835,13 +861,16 @@ export const query = async (serviceName: string, requestBody: string): Promise<a
   return result.serviceResponse.responseBody;
 };
 
-// ==================== SEPARAÇÃO (NOVO) ====================
+// ==================== SEPARAÇÃO ====================
 
 export interface ItemSeparacao {
   NUTAREFA: number;
+  NUNOTA: number;
+  OC: number;
+  NUSEPARACAO: number;
   CODPROD: number;
-  REFERENCIA: string;
   DESCRPROD: string;
+  REFERENCIA: string;
   LOTE: string;
   CODENDORIGEM: number;
   ENDERECO: string;
@@ -860,82 +889,208 @@ export interface ValidacaoEstoque {
   bloqueados: ItemSeparacao[];
 }
 
-const SQL_ITENS_SEPARACAO = (nutarefa: number) => `
-  SELECT
-      ITT.NUTAREFA,
-      ITT.CODPROD,
-      ISNULL(P.REFERENCIA, '')   AS PRODUTO_REFERENCIA,
-      ISNULL(P.DESCRPROD, '')    AS DESCRPROD,
-      ITT.CONTROLE               AS LOTE,
-      ITT.CODENDORIGEM,
-      ISNULL(ENDORIG.ENDERECO, '') AS ENDERECO,
-      ISNULL(EST.CODVOL, '')     AS UNIDADE_ESTOQUE,
-      ISNULL(EST.ESTOQUE, 0)     AS ESTOQUE,
-      ISNULL(EST.SAIDASPEND, 0)  AS SAIDASPEND,
-      ISNULL(VOA.CODBARRA, '')   AS CODBARRA,
-      ISNULL(VOA.QUANTIDADE, 1)  AS QTD_POR_CAIXA,
-      CASE
-          WHEN ISNULL(EST.SAIDASPEND, 0) <= 0 THEN 0
-          WHEN EST.CODVOL = 'CX' THEN EST.SAIDASPEND
-          WHEN EST.CODVOL = 'UN' AND ISNULL(VOA.QUANTIDADE, 0) > 0
-              THEN CAST(EST.SAIDASPEND AS DECIMAL(10,2)) / VOA.QUANTIDADE
-          ELSE EST.SAIDASPEND
-      END AS QTD_BIPAR,
-      CASE
-          WHEN EST.CODEND IS NULL THEN 1
-          WHEN ISNULL(EST.SAIDASPEND, 0) > ISNULL(EST.ESTOQUE, 0) THEN 1
-          ELSE 0
-      END AS BLOQUEADO
-  FROM SANKHYA.TGWITT ITT
-  LEFT JOIN SANKHYA.TGWEST EST
-      ON EST.CODEND   = ITT.CODENDORIGEM
-     AND EST.CODPROD  = ITT.CODPROD
-     AND EST.CONTROLE = ITT.CONTROLE
-  LEFT JOIN SANKHYA.TGFPRO P
-      ON P.CODPROD = ITT.CODPROD
-  LEFT JOIN SANKHYA.TGWEND ENDORIG
-      ON ENDORIG.CODEND = ITT.CODENDORIGEM
-  LEFT JOIN SANKHYA.TGFVOA VOA
-      ON VOA.CODPROD = EST.CODPROD
-     AND VOA.CODVOL  = 'CX'
-  WHERE ITT.NUTAREFA = ${Number(nutarefa)}
-  ORDER BY ITT.CODPROD, ITT.CONTROLE
-`;
+/**
+ * ⚠️ O SQL da separação fica na tela `app/separacaoItem.tsx`.
+ * Aqui só expomos a interface e as funções de CRUD.
+ */
 
-export async function carregarItensSeparacao(
-  nutarefa: number
-): Promise<ValidacaoEstoque> {
-  const result = await queryJson('DbExplorerSP.executeQuery', {
-    sql: SQL_ITENS_SEPARACAO(nutarefa),
-  });
-
-  const rows: any[] = result?.rows ?? [];
-
-  const itens: ItemSeparacao[] = rows.map((row) => ({
-    NUTAREFA: Number(row[0]) || 0,
-    CODPROD: Number(row[1]) || 0,
-    REFERENCIA: row[2] || '',
-    DESCRPROD: row[3] || '',
-    LOTE: row[4] || '',
-    CODENDORIGEM: Number(row[5]) || 0,
-    ENDERECO: row[6] || '',
-    UNIDADE_ESTOQUE: row[7] || '',
-    ESTOQUE: Number(row[8]) || 0,
-    SAIDASPEND: Number(row[9]) || 0,
-    CODBARRA: row[10] || '',
-    QTD_POR_CAIXA: Number(row[11]) || 1,
-    QTD_BIPAR: Number(row[12]) || 0,
-    BLOQUEADO: Number(row[13]) || 0,
-  }));
-
-  const bloqueados = itens.filter((i) => i.BLOQUEADO === 1);
-
-  return {
-    podeSeparar: bloqueados.length === 0,
-    itens,
-    bloqueados,
+export const salvarSeparacaoWMS = async (data: {
+  NUNOTA: number;
+  NUTAREFA: number;
+  NUSEPARACAO: number;
+  ORDEMCARGA: number;
+  CODPROD: number;
+  DESCRPROD: string;
+  REFERENCIA: string;
+  CONTROLE: string;
+  VOLUMES: string;
+  USUARIO: string;
+}): Promise<any> => {
+  const requestBody = {
+    dataSet: {
+      rootEntity: 'AD_SEPARACAOWMS',
+      includePresentationFields: 'N',
+      dataRow: {
+        localFields: {
+          NUNOTA: { $: data.NUNOTA },
+          NUTAREFA: { $: data.NUTAREFA },
+          NUSEPARACAO: { $: data.NUSEPARACAO },
+          ORDEMCARGA: { $: data.ORDEMCARGA },
+          CODPROD: { $: data.CODPROD },
+          DESCRPROD: { $: data.DESCRPROD },
+          REFERENCIA: { $: data.REFERENCIA },
+          CONTROLE: { $: data.CONTROLE },
+          VOLUMES: { $: data.VOLUMES },
+          USUARIO: { $: data.USUARIO },
+        },
+      },
+      entity: {
+        fieldset: {
+          list:
+            'NUNOTA,NUTAREFA,NUSEPARACAO,ORDEMCARGA,CODPROD,DESCRPROD,REFERENCIA,CONTROLE,VOLUMES,USUARIO',
+        },
+      },
+    },
   };
-}
+
+  return await queryJson('CRUDServiceProvider.saveRecord', requestBody);
+};
+
+/**
+ * Busca as SEQUENCIA de todos os itens (linhas da TGWITT) de uma tarefa.
+ * DbExplorerSP.executeQuery só permite SELECT — ok.
+ */
+const buscarSequenciasTarefa = async (nutarefa: number): Promise<number[]> => {
+  const sql = `
+    SELECT SEQUENCIA
+    FROM SANKHYA.TGWITT
+    WHERE NUTAREFA = ${Number(nutarefa)}
+    ORDER BY SEQUENCIA
+  `;
+  const result = await queryJson('DbExplorerSP.executeQuery', { sql });
+  const rows: any[] = result?.rows ?? [];
+  return rows.map((r) => Number(r[0]) || 0).filter((n) => n > 0);
+};
+
+/**
+ * Marca a tarefa como "em separação" (SITUACAO='E').
+ * Como ItemTarefa tem PK composta (NUTAREFA + SEQUENCIA),
+ * busca as sequências e atualiza cada linha via saveRecord.
+ * A trigger [SANKHYA].[TRG_UPD_TGWITT_SEPARACAO] preenche
+ * CODUSUEXEC e DHINICIALEXEC.
+ */
+export const iniciarSeparacaoWMS = async (nutarefa: number): Promise<any> => {
+  const sequencias = await buscarSequenciasTarefa(nutarefa);
+
+  if (sequencias.length === 0) {
+    console.warn(`⚠️ Nenhum item encontrado na TGWITT para a tarefa ${nutarefa}`);
+    return { atualizados: 0 };
+  }
+
+  const resultados: any[] = [];
+
+  for (const sequencia of sequencias) {
+    const requestBody = {
+      dataSet: {
+        rootEntity: 'ItemTarefa',
+        includePresentationFields: 'N',
+        dataRow: {
+          key: {
+            NUTAREFA: { $: nutarefa },
+            SEQUENCIA: { $: sequencia },
+          },
+          localFields: {
+            SITUACAO: { $: 'E' },
+          },
+        },
+        entity: {
+          fieldset: {
+            list: 'NUTAREFA,SEQUENCIA,SITUACAO',
+          },
+        },
+      },
+    };
+
+    const res = await queryJson('CRUDServiceProvider.saveRecord', requestBody);
+    resultados.push(res);
+  }
+
+  console.log(
+    `▶️ Tarefa ${nutarefa}: ${sequencias.length} item(ns) marcados como 'E'`
+  );
+
+  return { atualizados: sequencias.length, resultados };
+};
+
+/**
+ * Rejeita a separação: volta para 'A' e limpa executor/data.
+ * Itera sobre todas as SEQUENCIA da tarefa (PK composta de ItemTarefa).
+ * A trigger [SANKHYA].[TRG_UPD_TGWITT_SEPARACAO] valida dono e limpa.
+ */
+export const rejeitarSeparacaoWMS = async (nutarefa: number): Promise<any> => {
+  const sequencias = await buscarSequenciasTarefa(nutarefa);
+
+  if (sequencias.length === 0) {
+    console.warn(`⚠️ Nenhum item encontrado na TGWITT para a tarefa ${nutarefa}`);
+    return { atualizados: 0 };
+  }
+
+  const resultados: any[] = [];
+
+  for (const sequencia of sequencias) {
+    const requestBody = {
+      dataSet: {
+        rootEntity: 'ItemTarefa',
+        includePresentationFields: 'N',
+        dataRow: {
+          key: {
+            NUTAREFA: { $: nutarefa },
+            SEQUENCIA: { $: sequencia },
+          },
+          localFields: {
+            SITUACAO: { $: 'A' },
+            CODUSUEXEC: { $: null },
+            DHINICIALEXEC: { $: null },
+          },
+        },
+        entity: {
+          fieldset: {
+            list: 'NUTAREFA,SEQUENCIA,SITUACAO,CODUSUEXEC,DHINICIALEXEC',
+          },
+        },
+      },
+    };
+
+    const res = await queryJson('CRUDServiceProvider.saveRecord', requestBody);
+    resultados.push(res);
+  }
+
+  console.log(
+    `◀️ Tarefa ${nutarefa}: ${sequencias.length} item(ns) rejeitados para 'A'`
+  );
+
+  return { atualizados: sequencias.length, resultados };
+};
+
+// ==================== VERIFICAÇÃO WMS ====================
+
+/**
+ * Verifica se a tarefa já foi concluída (existe registro em AD_SEPARACAOWMS).
+ */
+export const verificarSeparacaoConcluida = async (
+  nutarefa: number
+): Promise<boolean> => {
+  const sql = `
+    SELECT COUNT(*) AS QTD
+    FROM AD_SEPARACAOWMS
+    WHERE NUTAREFA = ${Number(nutarefa)}
+  `;
+
+  const result = await queryJson('DbExplorerSP.executeQuery', { sql });
+  const qtd = Number(result?.rows?.[0]?.[0] ?? 0);
+  return qtd > 0;
+};
+
+/**
+ * Verifica quais tarefas (da lista) já estão concluídas — em lote.
+ * Retorna um Set com os NUTAREFA que possuem registro em AD_SEPARACAOWMS.
+ */
+export const verificarTarefasConcluidas = async (
+  nutarefas: number[]
+): Promise<Set<number>> => {
+  if (nutarefas.length === 0) return new Set();
+
+  const lista = nutarefas.join(',');
+  const sql = `
+    SELECT DISTINCT NUTAREFA
+    FROM AD_SEPARACAOWMS
+    WHERE NUTAREFA IN (${lista})
+  `;
+
+  const result = await queryJson('DbExplorerSP.executeQuery', { sql });
+  const rows: any[] = result?.rows ?? [];
+  return new Set(rows.map((r) => Number(r[0])));
+};
 
 // ==================== HELPERS ====================
 
