@@ -91,10 +91,6 @@ export const getCurrentEnvironment = (): EnvironmentType => currentEnvironment;
 export const getCurrentApiURL = (): string =>
   queryApi.defaults.baseURL || 'URL não configurada';
 
-/**
- * Detalhes da configuração atual.
- * No fluxo OAuth/gateway não existe mais "URL manual", então isManual sempre false.
- */
 export const getConfigDetails = (): {
   environment: EnvironmentType;
   url: string;
@@ -122,8 +118,6 @@ export const setEnvironment = async (environment: EnvironmentType): Promise<void
     recreateLoginApiInstance(config.BASE_URL);
 
     await authService.invalidateToken();
-
-    // Limpar a sessão do usuário — mudou ambiente, precisa relogar
     await AsyncStorage.removeItem('sankhya_session');
 
     console.log(`✅ Ambiente alterado para: ${config.name}`);
@@ -242,27 +236,18 @@ export const clearInactivityTimer = () => {
   }
 };
 
-// ==================== COMPATIBILIDADE (sem IP manual) ====================
+// ==================== COMPATIBILIDADE ====================
 
-/**
- * @deprecated O fluxo atual usa apenas TEST (sandbox) e PRODUCTION via gateway.
- */
 export const setManualURL = async (_ipPort: string): Promise<boolean> => {
   throw new Error(
     'Configuração manual de IP não é mais suportada. Use os ambientes TEST (Sandbox) ou PRODUCTION.'
   );
 };
 
-/**
- * @deprecated Use setEnvironment('TEST' | 'PRODUCTION').
- */
 export const setBaseURL = async (_ipPort: string): Promise<boolean> => {
   return await setManualURL(_ipPort);
 };
 
-/**
- * Reseta a URL para o ambiente atual.
- */
 export const resetToEnvironmentURL = (): void => {
   const config = ENVIRONMENTS[currentEnvironment];
   queryApi.defaults.baseURL = config.BASE_URL;
@@ -666,10 +651,6 @@ export const buscarGrupoUsuario = async (username: string): Promise<number | nul
   }
 };
 
-/**
- * Busca o grupo do usuário e, se não encontrar (ou der erro), força logout.
- * Lança um Error para que a tela possa reagir (redirecionar para login, etc.).
- */
 export const buscarGrupoUsuarioOuDeslogar = async (
   username: string
 ): Promise<number> => {
@@ -889,11 +870,6 @@ export interface ValidacaoEstoque {
   bloqueados: ItemSeparacao[];
 }
 
-/**
- * ⚠️ O SQL da separação fica na tela `app/separacaoItem.tsx`.
- * Aqui só expomos a interface e as funções de CRUD.
- */
-
 export const salvarSeparacaoWMS = async (data: {
   NUNOTA: number;
   NUTAREFA: number;
@@ -936,10 +912,6 @@ export const salvarSeparacaoWMS = async (data: {
   return await queryJson('CRUDServiceProvider.saveRecord', requestBody);
 };
 
-/**
- * Busca as SEQUENCIA de todos os itens (linhas da TGWITT) de uma tarefa.
- * DbExplorerSP.executeQuery só permite SELECT — ok.
- */
 const buscarSequenciasTarefa = async (nutarefa: number): Promise<number[]> => {
   const sql = `
     SELECT SEQUENCIA
@@ -952,13 +924,6 @@ const buscarSequenciasTarefa = async (nutarefa: number): Promise<number[]> => {
   return rows.map((r) => Number(r[0]) || 0).filter((n) => n > 0);
 };
 
-/**
- * Marca a tarefa como "em separação" (SITUACAO='E').
- * Como ItemTarefa tem PK composta (NUTAREFA + SEQUENCIA),
- * busca as sequências e atualiza cada linha via saveRecord.
- * A trigger [SANKHYA].[TRG_UPD_TGWITT_SEPARACAO] preenche
- * CODUSUEXEC e DHINICIALEXEC.
- */
 export const iniciarSeparacaoWMS = async (nutarefa: number): Promise<any> => {
   const sequencias = await buscarSequenciasTarefa(nutarefa);
 
@@ -984,9 +949,7 @@ export const iniciarSeparacaoWMS = async (nutarefa: number): Promise<any> => {
           },
         },
         entity: {
-          fieldset: {
-            list: 'NUTAREFA,SEQUENCIA,SITUACAO',
-          },
+          fieldset: { list: 'NUTAREFA,SEQUENCIA,SITUACAO' },
         },
       },
     };
@@ -1002,11 +965,6 @@ export const iniciarSeparacaoWMS = async (nutarefa: number): Promise<any> => {
   return { atualizados: sequencias.length, resultados };
 };
 
-/**
- * Rejeita a separação: volta para 'A' e limpa executor/data.
- * Itera sobre todas as SEQUENCIA da tarefa (PK composta de ItemTarefa).
- * A trigger [SANKHYA].[TRG_UPD_TGWITT_SEPARACAO] valida dono e limpa.
- */
 export const rejeitarSeparacaoWMS = async (nutarefa: number): Promise<any> => {
   const sequencias = await buscarSequenciasTarefa(nutarefa);
 
@@ -1052,11 +1010,281 @@ export const rejeitarSeparacaoWMS = async (nutarefa: number): Promise<any> => {
   return { atualizados: sequencias.length, resultados };
 };
 
-// ==================== VERIFICAÇÃO WMS ====================
+// ==================== SEPARAÇÃO — MOVIMENTAÇÃO DE ESTOQUE ====================
 
 /**
- * Verifica se a tarefa já foi concluída (existe registro em AD_SEPARACAOWMS).
+ * Converte um endereço (XX.XX.XX) em CODEND.
  */
+export const buscarCodEndPorEndereco = async (
+  endereco: string
+): Promise<number | null> => {
+  const digitos = endereco.replace(/\D/g, '');
+  if (digitos.length !== 6) {
+    throw new Error('O endereço de destino deve ter exatamente 6 dígitos (XX.XX.XX).');
+  }
+  const formatado = `${digitos.slice(0, 2)}.${digitos.slice(2, 4)}.${digitos.slice(4, 6)}`;
+
+  const sql = `
+    SELECT TOP 1 CODEND
+    FROM SANKHYA.TGWEND
+    WHERE ENDERECO = '${formatado}'
+  `;
+  const result = await queryJson('DbExplorerSP.executeQuery', { sql });
+  const rows: any[] = result?.rows ?? [];
+  if (rows.length === 0) return null;
+  return Number(rows[0][0]) || null;
+};
+
+/**
+ * Dados de um item da TGWITT.
+ */
+export const buscarItemTarefaWMS = async (
+  nutarefa: number,
+  sequencia: number
+): Promise<{
+  QTDDEST: number;
+  CODENDDESTINO: number;
+  CODPROD: number;
+  CONTROLE: string;
+} | null> => {
+  const sql = `
+    SELECT
+      ISNULL(QTDDEST, 0)       AS QTDDEST,
+      ISNULL(CODENDDESTINO, 0) AS CODENDDESTINO,
+      CODPROD,
+      CONTROLE
+    FROM SANKHYA.TGWITT
+    WHERE NUTAREFA = ${Number(nutarefa)}
+      AND SEQUENCIA = ${Number(sequencia)}
+  `;
+  const result = await queryJson('DbExplorerSP.executeQuery', { sql });
+  const rows: any[] = result?.rows ?? [];
+  if (rows.length === 0) return null;
+  return {
+    QTDDEST: Number(rows[0][0]) || 0,
+    CODENDDESTINO: Number(rows[0][1]) || 0,
+    CODPROD: Number(rows[0][2]) || 0,
+    CONTROLE: rows[0][3] || '',
+  };
+};
+
+/**
+ * Fator de conversão (TGFVOA.QUANTIDADE) do produto para uma unidade.
+ */
+export const buscarFatorConversaoWMS = async (
+  codprod: number,
+  codvol: string
+): Promise<number> => {
+  const sql = `
+    SELECT TOP 1 ISNULL(QUANTIDADE, 1)
+    FROM SANKHYA.TGFVOA
+    WHERE CODPROD = ${Number(codprod)}
+      AND CODVOL = '${codvol}'
+  `;
+  const result = await queryJson('DbExplorerSP.executeQuery', { sql });
+  const rows: any[] = result?.rows ?? [];
+  if (rows.length === 0) return 1;
+  return Number(rows[0][0]) || 1;
+};
+
+/**
+ * Ajusta o estoque na TGWEST via entidade CRUD EstoqueEndereco.
+ * PK composta: CODEMP + CODEND + CODPROD + CONTROLE.
+ * Se a linha existir faz UPDATE; senão INSERT.
+ * Recalcula ESTOQUEVOLPAD conforme CODVOL:
+ *   - 'CX' → ESTOQUEVOLPAD = ESTOQUE * TGFVOA.QUANTIDADE ('UN')
+ *   - outros → ESTOQUEVOLPAD = ESTOQUE
+ */
+export const ajustarEstoqueWMS = async (data: {
+  CODEND: number;
+  CODPROD: number;
+  CONTROLE: string;
+  QTDDEST: number;
+  OPERACAO: 'SOMA' | 'SUBTRAI';
+}): Promise<void> => {
+  // CODEMP fixo = 2 (empresa do WMS). Se precisar suportar multiempresa,
+  // passe o CODEMP por parâmetro.
+  const CODEMP = 2;
+
+  // 1) Verifica se a linha existe (para decidir UPDATE x INSERT)
+  const sqlBusca = `
+    SELECT
+      ISNULL(ESTOQUE, 0)       AS ESTOQUE,
+      ISNULL(CODVOL, 'UN')     AS CODVOL,
+      ISNULL(CODEMP, ${CODEMP}) AS CODEMP
+    FROM SANKHYA.TGWEST
+    WHERE CODEMP   = ${CODEMP}
+      AND CODEND   = ${Number(data.CODEND)}
+      AND CODPROD  = ${Number(data.CODPROD)}
+      AND CONTROLE = '${data.CONTROLE}'
+  `;
+  const result = await queryJson('DbExplorerSP.executeQuery', { sql: sqlBusca });
+  const rows: any[] = result?.rows ?? [];
+  const existe = rows.length > 0;
+
+  let estoqueAtual = 0;
+  let codvol = 'UN';
+
+  if (existe) {
+    estoqueAtual = Number(rows[0][0]) || 0;
+    codvol = rows[0][1] || 'UN';
+  }
+
+  // 2) Calcula novo estoque
+  const novoEstoque =
+    data.OPERACAO === 'SOMA'
+      ? estoqueAtual + data.QTDDEST
+      : estoqueAtual - data.QTDDEST;
+
+  const estoqueFinal = novoEstoque < 0 ? 0 : novoEstoque;
+
+  // 3) Calcula ESTOQUEVOLPAD
+  let estoqueVolPad = estoqueFinal;
+  if (codvol === 'CX') {
+    const fator = await buscarFatorConversaoWMS(data.CODPROD, 'UN');
+    estoqueVolPad = estoqueFinal * fator;
+  }
+
+  // 4) Monta o payload com PK completa (CODEMP + CODEND + CODPROD + CONTROLE)
+  const requestBody = {
+    dataSet: {
+      rootEntity: 'EstoqueEndereco',
+      includePresentationFields: 'N',
+      dataRow: {
+        key: existe
+          ? {
+              CODEMP: { $: CODEMP },
+              CODEND: { $: data.CODEND },
+              CODPROD: { $: data.CODPROD },
+              CONTROLE: { $: data.CONTROLE },
+            }
+          : undefined,
+        localFields: {
+          CODEMP: { $: CODEMP },
+          CODEND: { $: data.CODEND },
+          CODPROD: { $: data.CODPROD },
+          CONTROLE: { $: data.CONTROLE },
+          ESTOQUE: { $: estoqueFinal },
+          ESTOQUEVOLPAD: { $: estoqueVolPad },
+          CODVOL: { $: codvol },
+        },
+      },
+      entity: {
+        fieldset: {
+          list: 'CODEMP,CODEND,CODPROD,CONTROLE,ESTOQUE,ESTOQUEVOLPAD,CODVOL',
+        },
+      },
+    },
+  };
+
+  await queryJson('CRUDServiceProvider.saveRecord', requestBody);
+};
+
+export const moverEstoqueItemWMS = async (data: {
+  NUTAREFA: number;
+  SEQUENCIA: number;
+  CODPROD: number;
+  CONTROLE: string;
+  CODEND_ANTERIOR: number;
+  CODEND_NOVO: number;
+  QTDDEST: number;
+}): Promise<void> => {
+  const requestBody = {
+    dataSet: {
+      rootEntity: 'ItemTarefa',
+      includePresentationFields: 'N',
+      dataRow: {
+        key: {
+          NUTAREFA: { $: data.NUTAREFA },
+          SEQUENCIA: { $: data.SEQUENCIA },
+        },
+        localFields: {
+          SITUACAO: { $: 'F' },
+          CODENDDESTINO: { $: data.CODEND_NOVO },
+        },
+      },
+      entity: {
+        fieldset: {
+          list: 'NUTAREFA,SEQUENCIA,SITUACAO,CODENDDESTINO',
+        },
+      },
+    },
+  };
+
+  await queryJson('CRUDServiceProvider.saveRecord', requestBody);
+};
+
+/**
+ * Verifica se todos os itens da tarefa estão com SITUACAO = 'F' na TGWITT.
+ */
+export const verificarTodosItensFinalizadosWMS = async (
+  nutarefa: number
+): Promise<boolean> => {
+  const sql = `
+    SELECT
+      COUNT(*) AS TOTAL,
+      SUM(CASE WHEN SITUACAO = 'F' THEN 1 ELSE 0 END) AS FINALIZADOS
+    FROM SANKHYA.TGWITT
+    WHERE NUTAREFA = ${Number(nutarefa)}
+  `;
+  const result = await queryJson('DbExplorerSP.executeQuery', { sql });
+  const row = result?.rows?.[0] ?? [0, 0];
+  const total = Number(row[0]) || 0;
+  const finalizados = Number(row[1]) || 0;
+  return total > 0 && total === finalizados;
+};
+
+/**
+ * Finaliza a Tarefa (TGWTAR) e a Separação (TGWSEP) quando todos
+ * os itens da NUTAREFA foram concluídos.
+ */
+export const finalizarTarefaWMS = async (data: {
+  NUTAREFA: number;
+  NUSEPARACAO: number;
+}): Promise<any> => {
+  const resultados: any = {};
+
+  try {
+    const requestTarefa = {
+      dataSet: {
+        rootEntity: 'Tarefa',
+        includePresentationFields: 'N',
+        dataRow: {
+          key: { NUTAREFA: { $: data.NUTAREFA } },
+          localFields: { SITUACAO: { $: 'F' } },
+        },
+        entity: { fieldset: { list: 'NUTAREFA,SITUACAO' } },
+      },
+    };
+    resultados.tarefa = await queryJson('CRUDServiceProvider.saveRecord', requestTarefa);
+  } catch (err) {
+    console.warn('⚠️ Falha ao finalizar Tarefa (TGWTAR):', err);
+    resultados.tarefa = { error: err };
+  }
+
+  try {
+    const requestSep = {
+      dataSet: {
+        rootEntity: 'Separacao',
+        includePresentationFields: 'N',
+        dataRow: {
+          key: { NUSEPARACAO: { $: data.NUSEPARACAO } },
+          localFields: { SITUACAO: { $: 2 } },
+        },
+        entity: { fieldset: { list: 'NUSEPARACAO,SITUACAO' } },
+      },
+    };
+    resultados.separacao = await queryJson('CRUDServiceProvider.saveRecord', requestSep);
+  } catch (err) {
+    console.warn('⚠️ Falha ao finalizar Separação (TGWSEP):', err);
+    resultados.separacao = { error: err };
+  }
+
+  return resultados;
+};
+
+// ==================== VERIFICAÇÃO WMS ====================
+
 export const verificarSeparacaoConcluida = async (
   nutarefa: number
 ): Promise<boolean> => {
@@ -1071,10 +1299,6 @@ export const verificarSeparacaoConcluida = async (
   return qtd > 0;
 };
 
-/**
- * Verifica quais tarefas (da lista) já estão concluídas — em lote.
- * Retorna um Set com os NUTAREFA que possuem registro em AD_SEPARACAOWMS.
- */
 export const verificarTarefasConcluidas = async (
   nutarefas: number[]
 ): Promise<Set<number>> => {

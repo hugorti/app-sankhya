@@ -9,6 +9,7 @@ import {
   TextInput,
   Alert,
   BackHandler,
+  Modal,
 } from 'react-native';
 
 import { useState, useEffect, useCallback, useRef } from 'react';
@@ -18,6 +19,11 @@ import {
   salvarSeparacaoWMS,
   iniciarSeparacaoWMS,
   rejeitarSeparacaoWMS,
+  buscarCodEndPorEndereco,
+  buscarItemTarefaWMS,
+  moverEstoqueItemWMS,
+  verificarTodosItensFinalizadosWMS,
+  finalizarTarefaWMS,
   ItemSeparacao,
   registerUserActivity,
 } from '@/services/api';
@@ -67,16 +73,19 @@ const SQL_ITENS_SEPARACAO = (nutarefa: number) => `
       ISNULL(EST.SAIDASPEND, 0)              AS SAIDASPEND,
       ISNULL(VOA.CODBARRA, '')               AS CODBARRA,
       ISNULL(VOA.QUANTIDADE, 1)              AS QTD_POR_CAIXA,
+      -- 🔹 QTD_BIPAR agora vem da TGWITT.QTDORIG (quantidade da tarefa)
+      --    Convertendo para caixas quando o item estiver em UN
       CASE
-          WHEN ISNULL(EST.SAIDASPEND, 0) <= 0 THEN 0
-          WHEN EST.CODVOL = 'CX' THEN EST.SAIDASPEND
-          WHEN EST.CODVOL = 'UN' AND ISNULL(VOA.QUANTIDADE, 0) > 0
-              THEN CAST(EST.SAIDASPEND AS DECIMAL(10,2)) / VOA.QUANTIDADE
-          ELSE EST.SAIDASPEND
+          WHEN ISNULL(ITT.QTDORIG, 0) <= 0 THEN 0
+          WHEN ISNULL(ITT.CODVOLORIG, 'UN') = 'CX' THEN ITT.QTDORIG
+          WHEN ISNULL(ITT.CODVOLORIG, 'UN') = 'UN'
+               AND ISNULL(VOA.QUANTIDADE, 0) > 0
+              THEN CAST(ITT.QTDORIG AS DECIMAL(10,2)) / VOA.QUANTIDADE
+          ELSE ITT.QTDORIG
       END AS QTD_BIPAR,
       CASE
           WHEN EST.CODEND IS NULL THEN 1
-          WHEN ISNULL(EST.SAIDASPEND, 0) > ISNULL(EST.ESTOQUE, 0) THEN 1
+          WHEN ISNULL(ITT.QTDORIG, 0) > ISNULL(EST.ESTOQUE, 0) THEN 1
           ELSE 0
       END AS BLOQUEADO
   FROM SANKHYA.TGWITT ITT
@@ -158,6 +167,9 @@ export default function SeparacaoItemScreen() {
   const [endereco, setEndereco] = useState('');
   const [lote, setLote] = useState('');
   const [codigoBarras, setCodigoBarras] = useState('');
+
+  const [enderecoDestino, setEnderecoDestino] = useState('');
+  const [modalDestinoVisivel, setModalDestinoVisivel] = useState(false);
 
   const inputProdutoRef = useRef<TextInput>(null);
   const inputEnderecoRef = useRef<TextInput>(null);
@@ -264,14 +276,12 @@ export default function SeparacaoItemScreen() {
       setLoading(true);
       setError(null);
 
-      // 🔹 Marca a tarefa como "em separação" no TGWITT.
-      //    A trigger preenche CODUSUEXEC e DHINICIALEXEC.
+      // 🔹 Marca a tarefa como "em separação" no TGWITT
       try {
         await iniciarSeparacaoWMS(nutarefa);
         console.log(`▶️ Tarefa ${nutarefa} marcada como em separação (SITUACAO='E')`);
       } catch (errIni) {
         console.warn('⚠️ Não foi possível marcar tarefa como em separação:', errIni);
-        // não aborta: usuário ainda consegue trabalhar
       }
 
       const validacao = await carregarItensSeparacaoLocal(nutarefa);
@@ -371,7 +381,6 @@ export default function SeparacaoItemScreen() {
       bipTimerRef.current = null;
     }
 
-    // Limpa SEMPRE antes de validar — o próximo bipe sempre começa do zero
     const codigo = (codigoInformado ?? codigoBarras).trim();
     setCodigoBarras('');
     bufferRef.current = '';
@@ -486,57 +495,106 @@ export default function SeparacaoItemScreen() {
       return;
     }
 
-    Alert.alert(
-      'Concluir separação',
-      'Deseja finalizar a separação desta tarefa?',
-      [
-        { text: 'Cancelar', style: 'cancel' },
-        {
-          text: 'Concluir',
-          style: 'default',
-          onPress: async () => {
-            try {
-              setConcluindo(true);
+    setEnderecoDestino('');
+    setModalDestinoVisivel(true);
+  };
 
-              const usuario = session.username;
+  const executarConclusao = async (enderecoFormatado: string) => {
+    try {
+      setConcluindo(true);
 
-              for (const it of itens) {
-                await salvarSeparacaoWMS({
-                  NUNOTA: it.NUNOTA,
-                  NUTAREFA: it.NUTAREFA,
-                  NUSEPARACAO: it.NUSEPARACAO,
-                  ORDEMCARGA: it.OC,
-                  CODPROD: it.CODPROD,
-                  DESCRPROD: it.DESCRPROD,
-                  REFERENCIA: it.REFERENCIA,
-                  CONTROLE: it.LOTE,
-                  VOLUMES: `${it.BIPADO} / ${it.QTD_BIPAR}`,
-                  USUARIO: usuario,
-                });
-              }
+      const codendNovo = await buscarCodEndPorEndereco(enderecoFormatado);
+      if (!codendNovo) {
+        Alert.alert(
+          'Endereço não encontrado',
+          `Não encontrei o endereço ${enderecoFormatado} na TGWEND. Verifique e tente novamente.`
+        );
+        setConcluindo(false);
+        return;
+      }
 
-              await limparProgresso();
+      const usuario = session!.username;
 
-              Alert.alert(
-                'Separação concluída ✅',
-                'Os registros foram salvos com sucesso.',
-                [{ text: 'OK', onPress: () => router.replace('/(tabs)') }]
-              );
-            } catch (err) {
-              console.error('❌ Erro ao concluir separação:', err);
-              Alert.alert(
-                'Erro',
-                err instanceof Error
-                  ? err.message
-                  : 'Não foi possível concluir a separação.'
-              );
-            } finally {
-              setConcluindo(false);
-            }
-          },
-        },
-      ]
-    );
+      // 1) Salva conferência em AD_SEPARACAOWMS
+      for (const it of itens) {
+        await salvarSeparacaoWMS({
+          NUNOTA: it.NUNOTA,
+          NUTAREFA: it.NUTAREFA,
+          NUSEPARACAO: it.NUSEPARACAO,
+          ORDEMCARGA: it.OC,
+          CODPROD: it.CODPROD,
+          DESCRPROD: it.DESCRPROD,
+          REFERENCIA: it.REFERENCIA,
+          CONTROLE: it.LOTE,
+          VOLUMES: `${it.BIPADO} / ${it.QTD_BIPAR}`,
+          USUARIO: usuario,
+        });
+      }
+
+      // 2) SEQUENCIA pendentes da TGWITT
+      const sqlSeq = `
+        SELECT SEQUENCIA
+        FROM SANKHYA.TGWITT
+        WHERE NUTAREFA = ${Number(itens[0].NUTAREFA)}
+          AND SITUACAO <> 'F'
+      `;
+      const resSeq = await queryJson('DbExplorerSP.executeQuery', { sql: sqlSeq });
+      const sequencias: number[] = (resSeq?.rows ?? [])
+        .map((r: any[]) => Number(r[0]) || 0)
+        .filter((n: number) => n > 0);
+
+      if (sequencias.length === 0) {
+        console.warn('⚠️ Nenhuma sequência pendente encontrada.');
+        setConcluindo(false);
+        return;
+      }
+
+      // 3) Para cada SEQUENCIA: movimenta estoque + atualiza TGWITT
+      for (const sequencia of sequencias) {
+        const item = await buscarItemTarefaWMS(itens[0].NUTAREFA, sequencia);
+        if (!item) continue;
+
+        await moverEstoqueItemWMS({
+          NUTAREFA: itens[0].NUTAREFA,
+          SEQUENCIA: sequencia,
+          CODPROD: item.CODPROD,
+          CONTROLE: item.CONTROLE,
+          CODEND_ANTERIOR: item.CODENDDESTINO,
+          CODEND_NOVO: codendNovo,
+          QTDDEST: item.QTDDEST,
+        });
+      }
+
+      // 4) Se todos os itens da tarefa ficaram 'F', finaliza Tarefa e Separação
+      const todosOk = await verificarTodosItensFinalizadosWMS(itens[0].NUTAREFA);
+
+      if (todosOk) {
+        await finalizarTarefaWMS({
+          NUTAREFA: itens[0].NUTAREFA,
+          NUSEPARACAO: itens[0].NUSEPARACAO,
+        });
+      }
+
+      await limparProgresso();
+
+      Alert.alert(
+        'Separação concluída ✅',
+        todosOk
+          ? 'Estoque movimentado. Tarefa e Separação finalizadas.'
+          : 'Itens finalizados. Ainda restam itens em outras conferências.',
+        [{ text: 'OK', onPress: () => router.replace('/(tabs)') }]
+      );
+    } catch (err) {
+      console.error('❌ Erro ao concluir separação:', err);
+      Alert.alert(
+        'Erro',
+        err instanceof Error
+          ? err.message
+          : 'Não foi possível concluir a separação.'
+      );
+    } finally {
+      setConcluindo(false);
+    }
   };
 
   // ==================== SAIR / REJEITAR ====================
@@ -556,7 +614,6 @@ export default function SeparacaoItemScreen() {
             try {
               setRejeitando(true);
 
-              // 🔹 Rejeita no TGWITT — a trigger limpa CODUSUEXEC/DHINICIALEXEC
               await rejeitarSeparacaoWMS(nutarefa);
               console.log(`◀️ Tarefa ${nutarefa} rejeitada (SITUACAO='A')`);
             } catch (err) {
@@ -648,7 +705,7 @@ export default function SeparacaoItemScreen() {
         <View style={{ width: 24 }} />
       </View>
 
-      {/* BOTÕES REJEITAR / CONCLUIR LADO A LADO */}
+      {/* BOTÕES REJEITAR / CONCLUIR */}
       <View style={styles.acoesContainer}>
         <TouchableOpacity
           style={styles.rejeitarButton}
@@ -852,6 +909,68 @@ export default function SeparacaoItemScreen() {
           </View>
         </View>
       )}
+
+      {/* Modal: endereço de destino */}
+      <Modal
+        visible={modalDestinoVisivel}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setModalDestinoVisivel(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContent}>
+            <Text style={styles.modalTitle}>Endereço de destino</Text>
+            <Text style={styles.modalSubtitle}>
+              Digite 6 dígitos (XX.XX.XX)
+            </Text>
+
+            <TextInput
+              style={styles.modalInput}
+              keyboardType="numeric"
+              maxLength={8}
+              value={enderecoDestino}
+              onChangeText={(t) => {
+                const d = t.replace(/\D/g, '').slice(0, 6);
+                const fmt = [d.slice(0, 2), d.slice(2, 4), d.slice(4, 6)]
+                  .filter(Boolean)
+                  .join('.');
+                setEnderecoDestino(fmt);
+              }}
+              placeholder="00.00.00"
+              autoFocus
+            />
+
+            <View style={styles.modalButtons}>
+              <TouchableOpacity
+                style={[styles.modalBtn, styles.modalBtnCancel]}
+                onPress={() => setModalDestinoVisivel(false)}
+              >
+                <Text style={styles.modalBtnText}>Cancelar</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={[styles.modalBtn, styles.modalBtnOk]}
+                onPress={async () => {
+                  const digitos = enderecoDestino.replace(/\D/g, '');
+                  if (digitos.length !== 6) {
+                    Alert.alert(
+                      'Endereço inválido',
+                      'Digite 6 dígitos (XX.XX.XX).'
+                    );
+                    return;
+                  }
+                  setModalDestinoVisivel(false);
+                  await executarConclusao(
+                    `${digitos.slice(0, 2)}.${digitos.slice(2, 4)}.${digitos.slice(4, 6)}`
+                  );
+                }}
+              >
+                <Text style={styles.modalBtnText}>Confirmar</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
     </View>
   );
 }
@@ -859,7 +978,6 @@ export default function SeparacaoItemScreen() {
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#f5f5f5' },
 
-  // Input invisível de captura do bipe
   captureInput: {
     position: 'absolute',
     width: 1,
@@ -922,10 +1040,7 @@ const styles = StyleSheet.create({
     paddingVertical: 8,
     backgroundColor: '#FFF3E0',
   },
-  infoCol: {
-    flex: 1,
-    paddingHorizontal: 2,
-  },
+  infoCol: { flex: 1, paddingHorizontal: 2 },
   infoLabel: {
     fontSize: 10,
     color: '#E65100',
@@ -933,14 +1048,8 @@ const styles = StyleSheet.create({
     textTransform: 'uppercase',
     marginBottom: 2,
   },
-  infoValue: {
-    fontSize: 13,
-    color: '#333',
-    fontWeight: '700',
-  },
-  infoValueQtd: {
-    color: '#FF9800',
-  },
+  infoValue: { fontSize: 13, color: '#333', fontWeight: '700' },
+  infoValueQtd: { color: '#FF9800' },
 
   itemInfoBar: {
     flexDirection: 'row',
@@ -951,13 +1060,8 @@ const styles = StyleSheet.create({
     borderTopWidth: 1,
     borderTopColor: '#FFE0B2',
   },
-  itemInfoCol: {
-    flex: 1,
-    paddingHorizontal: 2,
-  },
-  itemInfoColEndereco: {
-    flex: 1.6,
-  },
+  itemInfoCol: { flex: 1, paddingHorizontal: 2 },
+  itemInfoColEndereco: { flex: 1.6 },
   itemInfoLabel: {
     fontSize: 10,
     color: '#E65100',
@@ -965,11 +1069,7 @@ const styles = StyleSheet.create({
     textTransform: 'uppercase',
     marginBottom: 2,
   },
-  itemInfoValue: {
-    fontSize: 13,
-    color: '#333',
-    fontWeight: '700',
-  },
+  itemInfoValue: { fontSize: 13, color: '#333', fontWeight: '700' },
 
   indicadoresContainer: {
     marginHorizontal: 8,
@@ -1012,9 +1112,7 @@ const styles = StyleSheet.create({
     fontWeight: 'bold',
     color: '#666',
   },
-  indicadorTextDestaque: {
-    color: '#333',
-  },
+  indicadorTextDestaque: { color: '#333' },
 
   formContainer: {
     backgroundColor: 'white',
@@ -1079,6 +1177,67 @@ const styles = StyleSheet.create({
     fontWeight: 'bold',
     fontSize: 15,
     marginLeft: 6,
+  },
+
+  // Modal de endereço de destino
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 20,
+  },
+  modalContent: {
+    backgroundColor: 'white',
+    borderRadius: 12,
+    padding: 20,
+    width: '100%',
+    maxWidth: 400,
+  },
+  modalTitle: {
+    fontSize: 18,
+    fontWeight: 'bold',
+    color: '#333',
+    marginBottom: 4,
+  },
+  modalSubtitle: {
+    fontSize: 13,
+    color: '#666',
+    marginBottom: 12,
+  },
+  modalInput: {
+    fontSize: 20,
+    fontWeight: 'bold',
+    color: '#333',
+    textAlign: 'center',
+    paddingVertical: 12,
+    paddingHorizontal: 10,
+    borderWidth: 2,
+    borderColor: '#FF9800',
+    borderRadius: 8,
+    backgroundColor: '#FFF3E0',
+    marginBottom: 16,
+  },
+  modalButtons: {
+    flexDirection: 'row',
+    gap: 8,
+  },
+  modalBtn: {
+    flex: 1,
+    paddingVertical: 12,
+    borderRadius: 8,
+    alignItems: 'center',
+  },
+  modalBtnCancel: {
+    backgroundColor: '#9E9E9E',
+  },
+  modalBtnOk: {
+    backgroundColor: '#4CAF50',
+  },
+  modalBtnText: {
+    color: 'white',
+    fontWeight: 'bold',
+    fontSize: 15,
   },
 
   loadingContainer: { flex: 1, justifyContent: 'center', alignItems: 'center' },
