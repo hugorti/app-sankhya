@@ -934,6 +934,72 @@ export const buscarCodEndPorEndereco = async (
 };
 
 /**
+ * Verifica se um endereço de checkout está LIVRE ou OCUPADO.
+ *
+ * Regras de "OCUPADO":
+ *  - Existe linha na TGWEST com ESTOQUE > 0, ENTRADASPEND > 0 ou SAIDASPEND > 0
+ *    para o CODEND consultado; OU
+ *  - Existe item na TGWITT com CODENDDESTINO = CODEND cuja Tarefa (TGWTAR)
+ *    ainda não está finalizada ('F') nem cancelada ('C').
+ *
+ * Retorna também o CODEND e a descrição (DESCREND) quando encontrado.
+ * Quando o endereço não existe em TGWEND (ou não está ativo/analítico),
+ * retorna { livre: false, codend: null, descr: '' }.
+ */
+export const verificarEnderecoLivre = async (
+  enderecoFormatado: string
+): Promise<{ livre: boolean; codend: number | null; descr: string }> => {
+  const digitos = enderecoFormatado.replace(/\D/g, '');
+  if (digitos.length !== 6) {
+    throw new Error('O endereço deve ter exatamente 6 dígitos (XX.XX.XX).');
+  }
+  const fmt = `${digitos.slice(0, 2)}.${digitos.slice(2, 4)}.${digitos.slice(4, 6)}`;
+
+  const sql = `
+    SELECT TOP 1
+        ENDE.CODEND,
+        ENDE.ENDERECO,
+        ENDE.DESCREND,
+        CASE
+            WHEN EXISTS (
+                SELECT 1
+                FROM SANKHYA.TGWEST EST
+                WHERE EST.CODEND = ENDE.CODEND
+                  AND (EST.ESTOQUE > 0 OR EST.ENTRADASPEND > 0 OR EST.SAIDASPEND > 0)
+            )
+            OR EXISTS (
+                SELECT 1
+                FROM SANKHYA.TGWITT ITT
+                INNER JOIN SANKHYA.TGWTAR TAR ON TAR.NUTAREFA = ITT.NUTAREFA
+                WHERE ITT.CODENDDESTINO = ENDE.CODEND
+                  AND TAR.SITUACAO NOT IN ('F', 'C')
+            )
+            THEN 'OCUPADO'
+            ELSE 'LIVRE'
+        END AS SITUACAO_CHECKOUT
+    FROM SANKHYA.TGWEND ENDE
+    WHERE ENDE.EXCLCONF  = 'S'
+      AND ENDE.ATIVO     = 'S'
+      AND ENDE.ANALITICO = 'S'
+      AND ENDE.ENDERECO  = '${fmt}'
+  `;
+
+  const result = await queryJson('DbExplorerSP.executeQuery', { sql });
+  const rows: any[] = result?.rows ?? [];
+
+  if (rows.length === 0) {
+    return { livre: false, codend: null, descr: '' };
+  }
+
+  const row = rows[0];
+  return {
+    livre: String(row[3]).toUpperCase() === 'LIVRE',
+    codend: Number(row[0]) || null,
+    descr: row[2] || '',
+  };
+};
+
+/**
  * Dados de um item da TGWITT.
  */
 export const buscarItemTarefaWMS = async (

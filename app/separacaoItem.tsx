@@ -24,6 +24,7 @@ import {
   moverEstoqueItemWMS,
   verificarTodosItensFinalizadosWMS,
   finalizarTarefaWMS,
+  verificarEnderecoLivre,
   ItemSeparacao,
   registerUserActivity,
 } from '@/services/api';
@@ -42,6 +43,8 @@ interface ProgressoSalvo {
 }
 
 type Etapa = 'PRODUTO' | 'ENDERECO' | 'LOTE' | 'CODIGO';
+
+type StatusDestino = 'IDLE' | 'VERIFICANDO' | 'LIVRE' | 'OCUPADO' | 'NAO_ENCONTRADO' | 'ERRO';
 
 const PROGRESSO_KEY = (nutarefa: number) => `@separacao_progresso_${nutarefa}`;
 
@@ -165,6 +168,11 @@ export default function SeparacaoItemScreen() {
 
   const [enderecoDestino, setEnderecoDestino] = useState('');
   const [modalDestinoVisivel, setModalDestinoVisivel] = useState(false);
+
+  // ===== Verificação do endereço de destino (feedback visual) =====
+  const [statusDestino, setStatusDestino] = useState<StatusDestino>('IDLE');
+  const [descrDestino, setDescrDestino] = useState<string>('');
+  const [erroVerificacao, setErroVerificacao] = useState<string | null>(null);
 
   const inputProdutoRef = useRef<TextInput>(null);
   const inputEnderecoRef = useRef<TextInput>(null);
@@ -390,7 +398,6 @@ export default function SeparacaoItemScreen() {
     );
 
     if (próximoIndex === -1) {
-      // ✅ NOVO: avisa que não há mais itens pendentes
       Alert.alert(
         'Itens concluídos ✅',
         'Todos os itens da tarefa foram bipados. Confirme a separação.'
@@ -409,7 +416,7 @@ export default function SeparacaoItemScreen() {
     limparApenasCodigo();
   }, [itens, itemAtivoIndex]);
 
-  // ==================== ETAPA 1: PRODUTO ====================
+  // ==================== ETAPA 1: PRODUTO (só bipe) ====================
 
   const confirmarProduto = () => {
     registerUserActivity();
@@ -424,7 +431,7 @@ export default function SeparacaoItemScreen() {
     const esperado = (itemAtivo.REFERENCIA || '').trim().toUpperCase();
 
     if (!valor) {
-      Alert.alert('Produto', 'Informe ou bipe o produto.');
+      Alert.alert('Produto', 'Bipe a referência do produto.');
       inputProdutoRef.current?.focus();
       return;
     }
@@ -440,7 +447,7 @@ export default function SeparacaoItemScreen() {
     if (valor !== esperado) {
       Alert.alert(
         'Produto inválido',
-        `Esperado: ${itemAtivo.REFERENCIA}\nDigitado: ${valorBruto}`
+        `Esperado: ${itemAtivo.REFERENCIA}\nBipado: ${valorBruto}`
       );
       setProduto('');
       bufferProdutoRef.current = '';
@@ -452,7 +459,7 @@ export default function SeparacaoItemScreen() {
     proximaEtapa('PRODUTO');
   };
 
-  // ==================== ETAPA 2: ENDEREÇO ====================
+  // ==================== ETAPA 2: ENDEREÇO (só bipe, tolerante a formato) ====================
 
   const confirmarEndereco = () => {
     registerUserActivity();
@@ -466,7 +473,7 @@ export default function SeparacaoItemScreen() {
     const esperado = (itemAtivo.ENDERECO || '').trim();
 
     if (!valorDigitado) {
-      Alert.alert('Endereço', 'Informe ou bipe o endereço.');
+      Alert.alert('Endereço', 'Bipe o endereço.');
       inputEnderecoRef.current?.focus();
       return;
     }
@@ -479,13 +486,14 @@ export default function SeparacaoItemScreen() {
       return;
     }
 
+    // formatarEndereco entende tanto '03112102001' quanto '03.11.21.02.001'
     const ok =
       formatarEndereco(valorDigitado) === formatarEndereco(esperado);
 
     if (!ok) {
       Alert.alert(
         'Endereço inválido',
-        `Esperado: ${formatarEndereco(esperado)}\nDigitado: ${formatarEndereco(valorDigitado)}`
+        `Esperado: ${formatarEndereco(esperado)}\nBipado: ${formatarEndereco(valorDigitado)}`
       );
       setEndereco('');
       bufferEnderecoRef.current = '';
@@ -558,7 +566,6 @@ export default function SeparacaoItemScreen() {
       return;
     }
 
-    // ✅ NOVO: impede bipar item já completo
     if (itemAtivo.BIPADO >= itemAtivo.QTD_BIPAR) {
       setCodigoBarras('');
       bufferRef.current = '';
@@ -600,7 +607,6 @@ export default function SeparacaoItemScreen() {
       return;
     }
 
-    // ✅ ALTERADO: nunca deixa BIPADO passar de QTD_BIPAR
     const novosItens = itens.map((it, idx) =>
       idx === itemAtivoIndex
         ? { ...it, BIPADO: Math.min(it.BIPADO + 1, it.QTD_BIPAR) }
@@ -613,7 +619,6 @@ export default function SeparacaoItemScreen() {
     const novoBipado = Math.min(itemAtivo.BIPADO + 1, itemAtivo.QTD_BIPAR);
 
     if (novoBipado >= itemAtivo.QTD_BIPAR) {
-      // ✅ Item completo → avança para o próximo item (reinicia em PRODUTO)
       Alert.alert(
         'Item completo ✅',
         `Ref ${itemAtivo.REFERENCIA} / Lote ${itemAtivo.LOTE} finalizado.`
@@ -621,7 +626,6 @@ export default function SeparacaoItemScreen() {
       limparApenasCodigo();
       setTimeout(() => avançarItem(), 200);
     } else {
-      // 🔹 Continua no mesmo item, permanece na etapa CODIGO (só o código repete)
       limparApenasCodigo();
     }
   };
@@ -665,15 +669,85 @@ export default function SeparacaoItemScreen() {
       return;
     }
 
+    // Reset do feedback ao abrir o modal
     setEnderecoDestino('');
+    setStatusDestino('IDLE');
+    setDescrDestino('');
+    setErroVerificacao(null);
     setModalDestinoVisivel(true);
   };
 
-  const executarConclusao = async (enderecoFormatado: string) => {
+  /**
+   * Único botão do modal: verifica o endereço e, se estiver LIVRE,
+   * executa a conclusão. Se estiver OCUPADO / não encontrado / erro,
+   * mostra Alert e mantém o modal aberto para o usuário digitar outro.
+   */
+  const confirmarConclusao = async () => {
+    const digitos = enderecoDestino.replace(/\D/g, '');
+    if (digitos.length !== 6) {
+      Alert.alert('Endereço inválido', 'Digite 6 dígitos (XX.XX.XX).');
+      return;
+    }
+
+    const enderecoFormatado = `${digitos.slice(0, 2)}.${digitos.slice(2, 4)}.${digitos.slice(4, 6)}`;
+
+    try {
+      setStatusDestino('VERIFICANDO');
+      setErroVerificacao(null);
+      setDescrDestino('');
+
+      const check = await verificarEnderecoLivre(enderecoFormatado);
+
+      if (check.codend === null) {
+        setStatusDestino('NAO_ENCONTRADO');
+        Alert.alert(
+          'Endereço não encontrado',
+          `O endereço ${enderecoFormatado} não existe na TGWEND (ou não está ativo/analítico). Digite outro endereço.`
+        );
+        return; // mantém o modal aberto
+      }
+
+      if (!check.livre) {
+        setStatusDestino('OCUPADO');
+        setDescrDestino(check.descr);
+        Alert.alert(
+          'Endereço ocupado',
+          `O endereço ${enderecoFormatado}${
+            check.descr ? ` (${check.descr})` : ''
+          } já está ocupado (estoque, pendência ou tarefa em andamento).\n\nDigite outro endereço de destino.`
+        );
+        return; // mantém o modal aberto
+      }
+
+      // ✅ Endereço LIVRE → conclui
+      setStatusDestino('LIVRE');
+      setDescrDestino(check.descr);
+
+      setModalDestinoVisivel(false);
+      await executarConclusao(enderecoFormatado, check.codend);
+    } catch (err) {
+      console.error('❌ Erro ao verificar/concluir endereço de destino:', err);
+      const msg =
+        err instanceof Error
+          ? err.message
+          : 'Não foi possível verificar o endereço de destino.';
+      setStatusDestino('ERRO');
+      setErroVerificacao(msg);
+      Alert.alert('Erro', msg);
+      // mantém o modal aberto
+    }
+  };
+
+  const executarConclusao = async (
+    enderecoFormatado: string,
+    codendJaResolvido?: number
+  ) => {
     try {
       setConcluindo(true);
 
-      const codendNovo = await buscarCodEndPorEndereco(enderecoFormatado);
+      const codendNovo =
+        codendJaResolvido ?? (await buscarCodEndPorEndereco(enderecoFormatado));
+
       if (!codendNovo) {
         Alert.alert(
           'Endereço não encontrado',
@@ -987,23 +1061,28 @@ export default function SeparacaoItemScreen() {
           </Text>
         </View>
 
-        {/* ETAPA 1: PRODUTO */}
+        {/* ETAPA 1: PRODUTO (só bipe, sem teclado) */}
         {etapa === 'PRODUTO' && (
           <View style={styles.formRow}>
             <Ionicons name="cube-outline" size={18} color="#FF9800" />
             <Text style={styles.formLabel}>Produto:</Text>
             <TextInput
               ref={inputProdutoRef}
-              style={styles.formInput}
-              placeholder="Bipe ou digite a referência"
+              style={styles.formInputLote}
+              placeholder="Bipe a referência"
               placeholderTextColor="#999"
               value={produto}
               onChangeText={(texto) => {
-                setProduto(texto);
-                bufferProdutoRef.current = texto;
+                const limpo = texto.replace(/\s/g, '');
+                setProduto(limpo);
+                bufferProdutoRef.current = limpo;
               }}
               autoCorrect={false}
               autoCapitalize="characters"
+              showSoftInputOnFocus={false}
+              caretHidden
+              contextMenuHidden
+              selectTextOnFocus={false}
               returnKeyType="next"
               onSubmitEditing={confirmarProduto}
               blurOnSubmit={false}
@@ -1011,15 +1090,15 @@ export default function SeparacaoItemScreen() {
           </View>
         )}
 
-        {/* ETAPA 2: ENDEREÇO */}
+        {/* ETAPA 2: ENDEREÇO (só bipe, aceita 03112102001 e 03.11.21.02.001) */}
         {etapa === 'ENDERECO' && (
           <View style={styles.formRow}>
             <Ionicons name="location-outline" size={18} color="#FF9800" />
             <Text style={styles.formLabel}>Endereço:</Text>
             <TextInput
               ref={inputEnderecoRef}
-              style={styles.formInput}
-              placeholder="Bipe ou digite o endereço"
+              style={styles.formInputLote}
+              placeholder="Bipe o endereço"
               placeholderTextColor="#999"
               value={endereco}
               onChangeText={(t) => {
@@ -1027,8 +1106,12 @@ export default function SeparacaoItemScreen() {
                 setEndereco(fmt);
                 bufferEnderecoRef.current = fmt;
               }}
-              keyboardType="numeric"
-              maxLength={15}
+              autoCorrect={false}
+              autoCapitalize="none"
+              showSoftInputOnFocus={false}
+              caretHidden
+              contextMenuHidden
+              selectTextOnFocus={false}
               returnKeyType="next"
               onSubmitEditing={confirmarEndereco}
               blurOnSubmit={false}
@@ -1128,18 +1211,21 @@ export default function SeparacaoItemScreen() {
         </View>
       )}
 
-      {/* Modal: endereço de destino */}
+      {/* Modal: endereço de destino (Confirmar verifica e conclui) */}
       <Modal
         visible={modalDestinoVisivel}
         transparent
         animationType="slide"
-        onRequestClose={() => setModalDestinoVisivel(false)}
+        onRequestClose={() => {
+          if (statusDestino === 'VERIFICANDO') return;
+          setModalDestinoVisivel(false);
+        }}
       >
         <View style={styles.modalOverlay}>
           <View style={styles.modalContent}>
             <Text style={styles.modalTitle}>Endereço de destino</Text>
             <Text style={styles.modalSubtitle}>
-              Digite 6 dígitos (XX.XX.XX)
+              Digite 6 dígitos (XX.XX.XX) — o endereço precisa estar livre
             </Text>
 
             <TextInput
@@ -1153,37 +1239,78 @@ export default function SeparacaoItemScreen() {
                   .filter(Boolean)
                   .join('.');
                 setEnderecoDestino(fmt);
+
+                // Qualquer alteração limpa o feedback anterior
+                if (statusDestino !== 'IDLE') {
+                  setStatusDestino('IDLE');
+                  setDescrDestino('');
+                  setErroVerificacao(null);
+                }
               }}
               placeholder="00.00.00"
               autoFocus
+              editable={statusDestino !== 'VERIFICANDO'}
             />
+
+            {/* Feedback do status (aparece após tentar confirmar) */}
+            {statusDestino === 'OCUPADO' && (
+              <View style={styles.statusBoxOcupado}>
+                <Ionicons name="close-circle" size={18} color="#C62828" />
+                <Text style={styles.statusTextOcupado}>
+                  Endereço OCUPADO
+                  {descrDestino ? ` (${descrDestino})` : ''}. Digite outro.
+                </Text>
+              </View>
+            )}
+
+            {statusDestino === 'NAO_ENCONTRADO' && (
+              <View style={styles.statusBoxOcupado}>
+                <Ionicons name="alert-circle" size={18} color="#C62828" />
+                <Text style={styles.statusTextOcupado}>
+                  Endereço não encontrado na TGWEND. Digite outro.
+                </Text>
+              </View>
+            )}
+
+            {statusDestino === 'ERRO' && (
+              <View style={styles.statusBoxOcupado}>
+                <Ionicons name="alert-circle" size={18} color="#C62828" />
+                <Text style={styles.statusTextOcupado}>
+                  {erroVerificacao || 'Falha ao verificar o endereço. Tente novamente.'}
+                </Text>
+              </View>
+            )}
 
             <View style={styles.modalButtons}>
               <TouchableOpacity
                 style={[styles.modalBtn, styles.modalBtnCancel]}
+                disabled={statusDestino === 'VERIFICANDO'}
                 onPress={() => setModalDestinoVisivel(false)}
               >
                 <Text style={styles.modalBtnText}>Cancelar</Text>
               </TouchableOpacity>
 
               <TouchableOpacity
-                style={[styles.modalBtn, styles.modalBtnOk]}
-                onPress={async () => {
-                  const digitos = enderecoDestino.replace(/\D/g, '');
-                  if (digitos.length !== 6) {
-                    Alert.alert(
-                      'Endereço inválido',
-                      'Digite 6 dígitos (XX.XX.XX).'
-                    );
-                    return;
-                  }
-                  setModalDestinoVisivel(false);
-                  await executarConclusao(
-                    `${digitos.slice(0, 2)}.${digitos.slice(2, 4)}.${digitos.slice(4, 6)}`
-                  );
-                }}
+                style={[
+                  styles.modalBtn,
+                  styles.modalBtnOk,
+                  statusDestino === 'VERIFICANDO' && styles.modalBtnDisabled,
+                ]}
+                disabled={statusDestino === 'VERIFICANDO'}
+                onPress={confirmarConclusao}
               >
-                <Text style={styles.modalBtnText}>Confirmar</Text>
+                {statusDestino === 'VERIFICANDO' ? (
+                  <ActivityIndicator size="small" color="white" />
+                ) : (
+                  <>
+                    <Ionicons
+                      name="checkmark-done-circle"
+                      size={18}
+                      color="white"
+                    />
+                    <Text style={styles.modalBtnText}>  Confirmar</Text>
+                  </>
+                )}
               </TouchableOpacity>
             </View>
           </View>
@@ -1463,23 +1590,49 @@ const styles = StyleSheet.create({
     borderColor: '#FF9800',
     borderRadius: 8,
     backgroundColor: '#FFF3E0',
-    marginBottom: 16,
+    marginBottom: 12,
   },
+
+  // Feedback de status (só aparece após tentar confirmar)
+  statusBoxOcupado: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#FFEBEE',
+    borderWidth: 1,
+    borderColor: '#D32F2F',
+    borderRadius: 6,
+    paddingVertical: 8,
+    paddingHorizontal: 10,
+    marginBottom: 12,
+    gap: 6,
+  },
+  statusTextOcupado: {
+    color: '#C62828',
+    fontWeight: '600',
+    fontSize: 13,
+    flex: 1,
+  },
+
   modalButtons: {
     flexDirection: 'row',
     gap: 8,
   },
   modalBtn: {
     flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
     paddingVertical: 12,
     borderRadius: 8,
-    alignItems: 'center',
   },
   modalBtnCancel: {
     backgroundColor: '#9E9E9E',
   },
   modalBtnOk: {
     backgroundColor: '#4CAF50',
+  },
+  modalBtnDisabled: {
+    backgroundColor: '#BDBDBD',
   },
   modalBtnText: {
     color: 'white',
