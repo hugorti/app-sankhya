@@ -41,6 +41,8 @@ interface ProgressoSalvo {
   salvoEm: number;
 }
 
+type Etapa = 'PRODUTO' | 'ENDERECO' | 'LOTE' | 'CODIGO';
+
 const PROGRESSO_KEY = (nutarefa: number) => `@separacao_progresso_${nutarefa}`;
 
 function formatarEndereco(endereco: string): string {
@@ -73,16 +75,7 @@ const SQL_ITENS_SEPARACAO = (nutarefa: number) => `
       ISNULL(EST.SAIDASPEND, 0)              AS SAIDASPEND,
       ISNULL(VOA.CODBARRA, '')               AS CODBARRA,
       ISNULL(VOA.QUANTIDADE, 1)              AS QTD_POR_CAIXA,
-      -- 🔹 QTD_BIPAR agora vem da TGWITT.QTDORIG (quantidade da tarefa)
-      --    Convertendo para caixas quando o item estiver em UN
-      CASE
-          WHEN ISNULL(ITT.QTDORIG, 0) <= 0 THEN 0
-          WHEN ISNULL(ITT.CODVOLORIG, 'UN') = 'CX' THEN ITT.QTDORIG
-          WHEN ISNULL(ITT.CODVOLORIG, 'UN') = 'UN'
-               AND ISNULL(VOA.QUANTIDADE, 0) > 0
-              THEN CAST(ITT.QTDORIG AS DECIMAL(10,2)) / VOA.QUANTIDADE
-          ELSE ITT.QTDORIG
-      END AS QTD_BIPAR,
+      ISNULL(ITT.QTDORIG, 0)                 AS QTD_BIPAR,
       CASE
           WHEN EST.CODEND IS NULL THEN 1
           WHEN ISNULL(ITT.QTDORIG, 0) > ISNULL(EST.ESTOQUE, 0) THEN 1
@@ -163,6 +156,8 @@ export default function SeparacaoItemScreen() {
 
   const [itemAtivoIndex, setItemAtivoIndex] = useState(0);
 
+  const [etapa, setEtapa] = useState<Etapa>('PRODUTO');
+
   const [produto, setProduto] = useState('');
   const [endereco, setEndereco] = useState('');
   const [lote, setLote] = useState('');
@@ -176,7 +171,11 @@ export default function SeparacaoItemScreen() {
   const inputLoteRef = useRef<TextInput>(null);
   const inputCaptureRef = useRef<TextInput>(null);
 
+  // Buffers síncronos (Enter do leitor pode chegar antes do state atualizar)
   const bufferRef = useRef('');
+  const bufferProdutoRef = useRef('');
+  const bufferEnderecoRef = useRef('');
+  const bufferLoteRef = useRef('');
   const bipTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // ==================== BLOQUEIO DO BOTÃO VOLTAR (ANDROID) ====================
@@ -255,12 +254,21 @@ export default function SeparacaoItemScreen() {
     }
   }, [nutarefa]);
 
-  // ==================== FOCO DO CAPTURE ====================
+  // ==================== FOCO DOS INPUTS ====================
 
   const focarCapture = useCallback(() => {
     setTimeout(() => {
       inputCaptureRef.current?.focus();
     }, 50);
+  }, []);
+
+  const focarEtapaAtual = useCallback((etapaAtual: Etapa) => {
+    setTimeout(() => {
+      if (etapaAtual === 'PRODUTO') inputProdutoRef.current?.focus();
+      else if (etapaAtual === 'ENDERECO') inputEnderecoRef.current?.focus();
+      else if (etapaAtual === 'LOTE') inputLoteRef.current?.focus();
+      else inputCaptureRef.current?.focus();
+    }, 100);
   }, []);
 
   // ==================== CARREGAR ====================
@@ -276,7 +284,6 @@ export default function SeparacaoItemScreen() {
       setLoading(true);
       setError(null);
 
-      // 🔹 Marca a tarefa como "em separação" no TGWITT
       try {
         await iniciarSeparacaoWMS(nutarefa);
         console.log(`▶️ Tarefa ${nutarefa} marcada como em separação (SITUACAO='E')`);
@@ -308,15 +315,18 @@ export default function SeparacaoItemScreen() {
         (it) => it.BIPADO < it.QTD_BIPAR
       );
       setItemAtivoIndex(primeiroPendente >= 0 ? primeiroPendente : 0);
+      setEtapa('PRODUTO');
     } catch (err) {
       console.error('❌ Erro ao carregar itens:', err);
       setError(err instanceof Error ? err.message : 'Erro ao carregar itens');
     } finally {
       setLoading(false);
       bufferRef.current = '';
-      focarCapture();
+      bufferProdutoRef.current = '';
+      bufferEnderecoRef.current = '';
+      bufferLoteRef.current = '';
     }
-  }, [nutarefa, carregarProgresso, focarCapture]);
+  }, [nutarefa, carregarProgresso]);
 
   useEffect(() => {
     carregar();
@@ -332,15 +342,15 @@ export default function SeparacaoItemScreen() {
 
   useEffect(() => {
     if (loading || error) return;
-    focarCapture();
-  }, [loading, error, itemAtivoIndex, focarCapture]);
+    focarEtapaAtual(etapa);
+  }, [loading, error, etapa, itemAtivoIndex, focarEtapaAtual]);
 
   useFocusEffect(
     useCallback(() => {
       if (!loading && !error) {
-        focarCapture();
+        focarEtapaAtual(etapa);
       }
-    }, [loading, error, focarCapture])
+    }, [loading, error, etapa, focarEtapaAtual])
   );
 
   const itemAtivo = itens[itemAtivoIndex];
@@ -358,22 +368,181 @@ export default function SeparacaoItemScreen() {
     focarCapture();
   };
 
+  const proximaEtapa = (etapaAtual: Etapa) => {
+    switch (etapaAtual) {
+      case 'PRODUTO':
+        setEtapa('ENDERECO');
+        break;
+      case 'ENDERECO':
+        setEtapa('LOTE');
+        break;
+      case 'LOTE':
+        setEtapa('CODIGO');
+        break;
+      default:
+        break;
+    }
+  };
+
   const avançarItem = useCallback(() => {
     const próximoIndex = itens.findIndex(
       (it, idx) => idx > itemAtivoIndex && it.BIPADO < it.QTD_BIPAR
     );
 
     if (próximoIndex === -1) {
+      // ✅ NOVO: avisa que não há mais itens pendentes
+      Alert.alert(
+        'Itens concluídos ✅',
+        'Todos os itens da tarefa foram bipados. Confirme a separação.'
+      );
       return;
     }
 
     setItemAtivoIndex(próximoIndex);
+    setEtapa('PRODUTO');
+    setProduto('');
+    setEndereco('');
+    setLote('');
+    bufferProdutoRef.current = '';
+    bufferEnderecoRef.current = '';
+    bufferLoteRef.current = '';
     limparApenasCodigo();
   }, [itens, itemAtivoIndex]);
 
-  // ==================== VALIDAR E INCREMENTAR ====================
+  // ==================== ETAPA 1: PRODUTO ====================
 
-  const validarEIncrementar = (codigoInformado?: string) => {
+  const confirmarProduto = () => {
+    registerUserActivity();
+
+    if (!itemAtivo) {
+      Alert.alert('Atenção', 'Nenhum item ativo para separar.');
+      return;
+    }
+
+    const valorBruto = (bufferProdutoRef.current || produto).trim();
+    const valor = valorBruto.toUpperCase();
+    const esperado = (itemAtivo.REFERENCIA || '').trim().toUpperCase();
+
+    if (!valor) {
+      Alert.alert('Produto', 'Informe ou bipe o produto.');
+      inputProdutoRef.current?.focus();
+      return;
+    }
+
+    if (!esperado) {
+      Alert.alert(
+        'Produto sem referência',
+        'Este item está sem REFERENCIA no cadastro (TGFPRO). Verifique no Sankhya.'
+      );
+      return;
+    }
+
+    if (valor !== esperado) {
+      Alert.alert(
+        'Produto inválido',
+        `Esperado: ${itemAtivo.REFERENCIA}\nDigitado: ${valorBruto}`
+      );
+      setProduto('');
+      bufferProdutoRef.current = '';
+      setTimeout(() => inputProdutoRef.current?.focus(), 100);
+      return;
+    }
+
+    bufferProdutoRef.current = '';
+    proximaEtapa('PRODUTO');
+  };
+
+  // ==================== ETAPA 2: ENDEREÇO ====================
+
+  const confirmarEndereco = () => {
+    registerUserActivity();
+
+    if (!itemAtivo) {
+      Alert.alert('Atenção', 'Nenhum item ativo para separar.');
+      return;
+    }
+
+    const valorDigitado = (bufferEnderecoRef.current || endereco).trim();
+    const esperado = (itemAtivo.ENDERECO || '').trim();
+
+    if (!valorDigitado) {
+      Alert.alert('Endereço', 'Informe ou bipe o endereço.');
+      inputEnderecoRef.current?.focus();
+      return;
+    }
+
+    if (!esperado) {
+      Alert.alert(
+        'Endereço sem cadastro',
+        'Este item está sem ENDERECO no cadastro (TGWEND). Verifique no Sankhya.'
+      );
+      return;
+    }
+
+    const ok =
+      formatarEndereco(valorDigitado) === formatarEndereco(esperado);
+
+    if (!ok) {
+      Alert.alert(
+        'Endereço inválido',
+        `Esperado: ${formatarEndereco(esperado)}\nDigitado: ${formatarEndereco(valorDigitado)}`
+      );
+      setEndereco('');
+      bufferEnderecoRef.current = '';
+      setTimeout(() => inputEnderecoRef.current?.focus(), 100);
+      return;
+    }
+
+    bufferEnderecoRef.current = '';
+    proximaEtapa('ENDERECO');
+  };
+
+  // ==================== ETAPA 3: LOTE (só bipe) ====================
+
+  const confirmarLote = () => {
+    registerUserActivity();
+
+    if (!itemAtivo) {
+      Alert.alert('Atenção', 'Nenhum item ativo para separar.');
+      return;
+    }
+
+    const valorBruto = (bufferLoteRef.current || lote).trim();
+    const valor = valorBruto.toUpperCase();
+    const esperado = (itemAtivo.LOTE || '').trim().toUpperCase();
+
+    if (!valor) {
+      Alert.alert('Lote', 'Bipe o lote.');
+      inputLoteRef.current?.focus();
+      return;
+    }
+
+    if (!esperado) {
+      Alert.alert(
+        'Lote sem cadastro',
+        'Este item está sem CONTROLE na TGWITT. Verifique no Sankhya.'
+      );
+      return;
+    }
+
+    if (valor !== esperado) {
+      Alert.alert(
+        'Lote inválido',
+        `Esperado: ${itemAtivo.LOTE}\nBipado: ${valorBruto}`
+      );
+      setLote('');
+      bufferLoteRef.current = '';
+      setTimeout(() => inputLoteRef.current?.focus(), 100);
+      return;
+    }
+
+    bufferLoteRef.current = '';
+    proximaEtapa('LOTE');
+  };
+
+  // ==================== ETAPA 4: CÓDIGO DE BARRAS (N vezes) ====================
+
+  const confirmarCodigo = (codigoInformado?: string) => {
     registerUserActivity();
 
     if (bipTimerRef.current) {
@@ -381,52 +550,48 @@ export default function SeparacaoItemScreen() {
       bipTimerRef.current = null;
     }
 
-    const codigo = (codigoInformado ?? codigoBarras).trim();
-    setCodigoBarras('');
-    bufferRef.current = '';
-
     if (!itemAtivo) {
+      setCodigoBarras('');
+      bufferRef.current = '';
       Alert.alert('Atenção', 'Nenhum item ativo para separar.');
       focarCapture();
       return;
     }
 
-    const produtoOk =
-      produto.trim().toUpperCase() === itemAtivo.REFERENCIA.trim().toUpperCase();
-    const enderecoOk =
-      formatarEndereco(endereco) === formatarEndereco(itemAtivo.ENDERECO);
-    const loteOk =
-      lote.trim().toUpperCase() === itemAtivo.LOTE.trim().toUpperCase();
-    const codigoOk = codigo === itemAtivo.CODBARRA.trim();
-
-    if (!produtoOk) {
+    // ✅ NOVO: impede bipar item já completo
+    if (itemAtivo.BIPADO >= itemAtivo.QTD_BIPAR) {
+      setCodigoBarras('');
+      bufferRef.current = '';
       Alert.alert(
-        'Produto inválido',
-        `Esperado: ${itemAtivo.REFERENCIA}\nDigitado: ${produto}`
+        'Item já completo',
+        `Ref ${itemAtivo.REFERENCIA} / Lote ${itemAtivo.LOTE} já foi bipado (${itemAtivo.BIPADO}/${itemAtivo.QTD_BIPAR}).`
       );
-      inputProdutoRef.current?.focus();
+      focarCapture();
       return;
     }
 
-    if (!enderecoOk) {
-      Alert.alert(
-        'Endereço inválido',
-        `Esperado: ${formatarEndereco(itemAtivo.ENDERECO)}\nDigitado: ${formatarEndereco(endereco)}`
-      );
-      inputEnderecoRef.current?.focus();
+    const codigo = (codigoInformado ?? bufferRef.current ?? codigoBarras).trim();
+    const esperado = (itemAtivo.CODBARRA || '').trim();
+
+    setCodigoBarras('');
+    bufferRef.current = '';
+
+    if (!codigo) {
+      Alert.alert('Código de barras', 'Bipe o código de barras.');
+      focarCapture();
       return;
     }
 
-    if (!loteOk) {
+    if (!esperado) {
       Alert.alert(
-        'Lote inválido',
-        `Esperado: ${itemAtivo.LOTE}\nDigitado: ${lote}`
+        'Produto sem código de barras',
+        'Este item está sem CODBARRA no cadastro (TGFVOA). Verifique no Sankhya.'
       );
-      inputLoteRef.current?.focus();
+      focarCapture();
       return;
     }
 
-    if (!codigoOk) {
+    if (codigo !== esperado) {
       Alert.alert(
         'Código de barras inválido',
         `Esperado: ${itemAtivo.CODBARRA}\nBipado: ${codigo}`
@@ -435,16 +600,20 @@ export default function SeparacaoItemScreen() {
       return;
     }
 
+    // ✅ ALTERADO: nunca deixa BIPADO passar de QTD_BIPAR
     const novosItens = itens.map((it, idx) =>
-      idx === itemAtivoIndex ? { ...it, BIPADO: it.BIPADO + 1 } : it
+      idx === itemAtivoIndex
+        ? { ...it, BIPADO: Math.min(it.BIPADO + 1, it.QTD_BIPAR) }
+        : it
     );
 
     setItens(novosItens);
     salvarProgresso(novosItens);
 
-    const novoBipado = itemAtivo.BIPADO + 1;
+    const novoBipado = Math.min(itemAtivo.BIPADO + 1, itemAtivo.QTD_BIPAR);
 
     if (novoBipado >= itemAtivo.QTD_BIPAR) {
+      // ✅ Item completo → avança para o próximo item (reinicia em PRODUTO)
       Alert.alert(
         'Item completo ✅',
         `Ref ${itemAtivo.REFERENCIA} / Lote ${itemAtivo.LOTE} finalizado.`
@@ -452,6 +621,7 @@ export default function SeparacaoItemScreen() {
       limparApenasCodigo();
       setTimeout(() => avançarItem(), 200);
     } else {
+      // 🔹 Continua no mesmo item, permanece na etapa CODIGO (só o código repete)
       limparApenasCodigo();
     }
   };
@@ -515,7 +685,6 @@ export default function SeparacaoItemScreen() {
 
       const usuario = session!.username;
 
-      // 1) Salva conferência em AD_SEPARACAOWMS
       for (const it of itens) {
         await salvarSeparacaoWMS({
           NUNOTA: it.NUNOTA,
@@ -531,7 +700,6 @@ export default function SeparacaoItemScreen() {
         });
       }
 
-      // 2) SEQUENCIA pendentes da TGWITT
       const sqlSeq = `
         SELECT SEQUENCIA
         FROM SANKHYA.TGWITT
@@ -549,7 +717,6 @@ export default function SeparacaoItemScreen() {
         return;
       }
 
-      // 3) Para cada SEQUENCIA: movimenta estoque + atualiza TGWITT
       for (const sequencia of sequencias) {
         const item = await buscarItemTarefaWMS(itens[0].NUTAREFA, sequencia);
         if (!item) continue;
@@ -565,7 +732,6 @@ export default function SeparacaoItemScreen() {
         });
       }
 
-      // 4) Se todos os itens da tarefa ficaram 'F', finaliza Tarefa e Separação
       const todosOk = await verificarTodosItensFinalizadosWMS(itens[0].NUTAREFA);
 
       if (todosOk) {
@@ -604,7 +770,7 @@ export default function SeparacaoItemScreen() {
 
     Alert.alert(
       'Sair da separação?',
-      'Ao sair, a tarefa será devolvida para a fila (rejeitada). Deseja continuar?',
+      'Ao sair, a tarefa será devolvida para a fila (rejeitada) e o progresso dos bipes será apagado. Deseja continuar?',
       [
         { text: 'Ficar', style: 'cancel' },
         {
@@ -616,6 +782,9 @@ export default function SeparacaoItemScreen() {
 
               await rejeitarSeparacaoWMS(nutarefa);
               console.log(`◀️ Tarefa ${nutarefa} rejeitada (SITUACAO='A')`);
+
+              await limparProgresso();
+              console.log(`🗑️ Progresso da tarefa ${nutarefa} apagado`);
             } catch (err) {
               console.error('❌ Erro ao rejeitar no TGWITT:', err);
               Alert.alert(
@@ -663,41 +832,41 @@ export default function SeparacaoItemScreen() {
 
   return (
     <View style={styles.container}>
-      {/* Input invisível que captura o bipe do leitor HID */}
-      <TextInput
-        ref={inputCaptureRef}
-        style={styles.captureInput}
-        value={codigoBarras}
-        onChangeText={(texto) => {
-          const limpo = texto.replace(/\s/g, '');
-          setCodigoBarras(limpo);
-          bufferRef.current = limpo;
+      {/* Input invisível que captura o bipe do leitor HID (etapa CODIGO) */}
+      {etapa === 'CODIGO' && (
+        <TextInput
+          ref={inputCaptureRef}
+          style={styles.captureInput}
+          value={codigoBarras}
+          onChangeText={(texto) => {
+            const limpo = texto.replace(/\s/g, '');
+            setCodigoBarras(limpo);
+            bufferRef.current = limpo;
 
-          if (bipTimerRef.current) {
-            clearTimeout(bipTimerRef.current);
-          }
+            if (bipTimerRef.current) {
+              clearTimeout(bipTimerRef.current);
+            }
 
-          if (!limpo) {
-            return;
-          }
+            if (!limpo) return;
 
-          bipTimerRef.current = setTimeout(() => {
-            const valor = bufferRef.current;
-            bufferRef.current = '';
-            validarEIncrementar(valor);
-            focarCapture();
-          }, 120);
-        }}
-        autoCorrect={false}
-        autoCapitalize="none"
-        showSoftInputOnFocus={false}
-        caretHidden
-        contextMenuHidden
-        selectTextOnFocus={false}
-        blurOnSubmit={false}
-        returnKeyType="done"
-        onSubmitEditing={() => focarCapture()}
-      />
+            bipTimerRef.current = setTimeout(() => {
+              const valor = bufferRef.current;
+              bufferRef.current = '';
+              confirmarCodigo(valor);
+              focarCapture();
+            }, 120);
+          }}
+          autoCorrect={false}
+          autoCapitalize="none"
+          showSoftInputOnFocus={false}
+          caretHidden
+          contextMenuHidden
+          selectTextOnFocus={false}
+          blurOnSubmit={false}
+          returnKeyType="done"
+          onSubmitEditing={() => focarCapture()}
+        />
+      )}
 
       <View style={styles.header}>
         <View style={{ width: 24 }} />
@@ -760,7 +929,11 @@ export default function SeparacaoItemScreen() {
         <View style={styles.infoCol}>
           <Text style={styles.infoLabel}>Qtd. bipar</Text>
           <Text style={[styles.infoValue, styles.infoValueQtd]}>
-            {itemAtivo ? `${itemAtivo.BIPADO}/${itemAtivo.QTD_BIPAR}` : '-'}
+            {itemAtivo
+              ? `${itemAtivo.BIPADO}/${itemAtivo.QTD_BIPAR} ${
+                  itemAtivo.UNIDADE_ESTOQUE || ''
+                }`
+              : '-'}
           </Text>
         </View>
       </View>
@@ -789,92 +962,137 @@ export default function SeparacaoItemScreen() {
         </View>
       )}
 
+      {/* ETAPAS */}
       <View style={styles.formContainer}>
-        <View style={styles.formRow}>
-          <Ionicons name="cube-outline" size={18} color="#FF9800" />
-          <Text style={styles.formLabel}>Produto:</Text>
-          <TextInput
-            ref={inputProdutoRef}
-            style={styles.formInput}
-            placeholder="Referência"
-            placeholderTextColor="#999"
-            value={produto}
-            onChangeText={setProduto}
-            autoCorrect={false}
-            autoCapitalize="characters"
-            returnKeyType="next"
-            onSubmitEditing={() => inputEnderecoRef.current?.focus()}
-            onBlur={() => {
-              setTimeout(() => {
-                if (!endereco && !lote) focarCapture();
-              }, 100);
-            }}
-          />
+        <View style={styles.etapaHeader}>
+          <Text style={styles.etapaLabel}>
+            Etapa{' '}
+            {etapa === 'PRODUTO'
+              ? '1'
+              : etapa === 'ENDERECO'
+              ? '2'
+              : etapa === 'LOTE'
+              ? '3'
+              : '4'}{' '}
+            de 4
+          </Text>
+          <Text style={styles.etapaNome}>
+            {etapa === 'PRODUTO'
+              ? 'Produto'
+              : etapa === 'ENDERECO'
+              ? 'Endereço'
+              : etapa === 'LOTE'
+              ? 'Lote'
+              : 'Código de Barras'}
+          </Text>
         </View>
 
-        <View style={styles.formRow}>
-          <Ionicons name="location-outline" size={18} color="#FF9800" />
-          <Text style={styles.formLabel}>Endereço:</Text>
-          <TextInput
-            ref={inputEnderecoRef}
-            style={styles.formInput}
-            placeholder="xx.xx.xx.xx.xxx"
-            placeholderTextColor="#999"
-            value={endereco}
-            onChangeText={(t) => setEndereco(formatarEndereco(t))}
-            keyboardType="numeric"
-            maxLength={15}
-            returnKeyType="next"
-            onSubmitEditing={() => inputLoteRef.current?.focus()}
-            onBlur={() => {
-              setTimeout(() => {
-                if (!lote) focarCapture();
-              }, 100);
-            }}
-          />
-        </View>
-
-        <View style={styles.formRow}>
-          <Ionicons name="barcode-outline" size={18} color="#FF9800" />
-          <Text style={styles.formLabel}>Lote:</Text>
-          <TextInput
-            ref={inputLoteRef}
-            style={styles.formInput}
-            placeholder="Controle"
-            placeholderTextColor="#999"
-            value={lote}
-            onChangeText={setLote}
-            autoCorrect={false}
-            autoCapitalize="characters"
-            returnKeyType="done"
-            onSubmitEditing={() => {
-              inputLoteRef.current?.blur();
-              focarCapture();
-            }}
-            onBlur={() => {
-              setTimeout(() => focarCapture(), 100);
-            }}
-          />
-        </View>
-
-        <View style={styles.formRow}>
-          <Ionicons name="qr-code-outline" size={18} color="#FF9800" />
-          <Text style={styles.formLabel}>Cód. Barras:</Text>
-          <View style={styles.formInputBipeDisplay}>
-            <Text style={styles.formInputBipeText} numberOfLines={1}>
-              {codigoBarras || 'Aguardando bipe...'}
-            </Text>
+        {/* ETAPA 1: PRODUTO */}
+        {etapa === 'PRODUTO' && (
+          <View style={styles.formRow}>
+            <Ionicons name="cube-outline" size={18} color="#FF9800" />
+            <Text style={styles.formLabel}>Produto:</Text>
+            <TextInput
+              ref={inputProdutoRef}
+              style={styles.formInput}
+              placeholder="Bipe ou digite a referência"
+              placeholderTextColor="#999"
+              value={produto}
+              onChangeText={(texto) => {
+                setProduto(texto);
+                bufferProdutoRef.current = texto;
+              }}
+              autoCorrect={false}
+              autoCapitalize="characters"
+              returnKeyType="next"
+              onSubmitEditing={confirmarProduto}
+              blurOnSubmit={false}
+            />
           </View>
-        </View>
+        )}
+
+        {/* ETAPA 2: ENDEREÇO */}
+        {etapa === 'ENDERECO' && (
+          <View style={styles.formRow}>
+            <Ionicons name="location-outline" size={18} color="#FF9800" />
+            <Text style={styles.formLabel}>Endereço:</Text>
+            <TextInput
+              ref={inputEnderecoRef}
+              style={styles.formInput}
+              placeholder="Bipe ou digite o endereço"
+              placeholderTextColor="#999"
+              value={endereco}
+              onChangeText={(t) => {
+                const fmt = formatarEndereco(t);
+                setEndereco(fmt);
+                bufferEnderecoRef.current = fmt;
+              }}
+              keyboardType="numeric"
+              maxLength={15}
+              returnKeyType="next"
+              onSubmitEditing={confirmarEndereco}
+              blurOnSubmit={false}
+            />
+          </View>
+        )}
+
+        {/* ETAPA 3: LOTE (somente bipe, sem teclado) */}
+        {etapa === 'LOTE' && (
+          <View style={styles.formRow}>
+            <Ionicons name="barcode-outline" size={18} color="#FF9800" />
+            <Text style={styles.formLabel}>Lote:</Text>
+            <TextInput
+              ref={inputLoteRef}
+              style={styles.formInputLote}
+              placeholder="Bipe o lote"
+              placeholderTextColor="#999"
+              value={lote}
+              onChangeText={(texto) => {
+                const limpo = texto.replace(/\s/g, '');
+                setLote(limpo);
+                bufferLoteRef.current = limpo;
+              }}
+              autoCorrect={false}
+              autoCapitalize="characters"
+              showSoftInputOnFocus={false}
+              caretHidden
+              contextMenuHidden
+              selectTextOnFocus={false}
+              returnKeyType="next"
+              onSubmitEditing={confirmarLote}
+              blurOnSubmit={false}
+            />
+          </View>
+        )}
+
+        {/* ETAPA 4: CÓDIGO DE BARRAS (N vezes) */}
+        {etapa === 'CODIGO' && (
+          <View style={styles.formRow}>
+            <Ionicons name="qr-code-outline" size={18} color="#FF9800" />
+            <Text style={styles.formLabel}>Cód. Barras:</Text>
+            <View style={styles.formInputBipeDisplay}>
+              <Text style={styles.formInputBipeText} numberOfLines={1}>
+                {codigoBarras || 'Aguardando bipe...'}
+              </Text>
+            </View>
+          </View>
+        )}
 
         <TouchableOpacity
           style={styles.confirmarButton}
           activeOpacity={0.8}
-          onPress={() => validarEIncrementar()}
           focusable={false}
+          onPress={() => {
+            if (etapa === 'PRODUTO') confirmarProduto();
+            else if (etapa === 'ENDERECO') confirmarEndereco();
+            else if (etapa === 'LOTE') confirmarLote();
+            else confirmarCodigo();
+          }}
         >
           <Ionicons name="checkmark-circle" size={20} color="white" />
-          <Text style={styles.confirmarButtonText}>Confirmar bipe</Text>
+          <Text style={styles.confirmarButtonText}>
+            {etapa === 'CODIGO' ? 'Confirmar bipe' : 'Confirmar'}
+          </Text>
         </TouchableOpacity>
       </View>
 
@@ -1124,6 +1342,24 @@ const styles = StyleSheet.create({
     borderWidth: 2,
     borderColor: '#FF9800',
   },
+  etapaHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginBottom: 10,
+    paddingBottom: 6,
+    borderBottomWidth: 1,
+    borderBottomColor: '#FFE0B2',
+  },
+  etapaLabel: {
+    fontSize: 11,
+    color: '#E65100',
+    fontWeight: '600',
+  },
+  etapaNome: {
+    fontSize: 13,
+    color: '#FF9800',
+    fontWeight: 'bold',
+  },
   formRow: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -1146,6 +1382,18 @@ const styles = StyleSheet.create({
     borderRadius: 6,
     borderWidth: 1,
     borderColor: '#ddd',
+    fontWeight: '500',
+  },
+  formInputLote: {
+    flex: 1,
+    fontSize: 15,
+    color: '#333',
+    paddingVertical: 8,
+    paddingHorizontal: 10,
+    backgroundColor: '#FFF3E0',
+    borderRadius: 6,
+    borderWidth: 1,
+    borderColor: '#FF9800',
     fontWeight: '500',
   },
   formInputBipeDisplay: {
@@ -1179,7 +1427,6 @@ const styles = StyleSheet.create({
     marginLeft: 6,
   },
 
-  // Modal de endereço de destino
   modalOverlay: {
     flex: 1,
     backgroundColor: 'rgba(0,0,0,0.5)',
