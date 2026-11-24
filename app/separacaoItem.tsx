@@ -38,15 +38,29 @@ interface ItemComBipe extends ItemSeparacao {
 
 interface ProgressoSalvo {
   nutarefa: number;
-  itens: { key: string; BIPADO: number }[];
+  itens: {
+    key: string;
+    BIPADO: number;
+    etapa?: string;
+    idsUnicos?: string[];
+  }[];
   salvoEm: number;
 }
 
-type Etapa = 'PRODUTO' | 'ENDERECO' | 'LOTE' | 'CODIGO';
+type Etapa = 'PRODUTO' | 'ENDERECO' | 'LOTE' | 'CODIGO' | 'IDUNICO';
 
-type StatusDestino = 'IDLE' | 'VERIFICANDO' | 'LIVRE' | 'OCUPADO' | 'NAO_ENCONTRADO' | 'ERRO';
+type StatusDestino =
+  | 'IDLE'
+  | 'VERIFICANDO'
+  | 'LIVRE'
+  | 'OCUPADO'
+  | 'NAO_ENCONTRADO'
+  | 'ERRO';
 
-const PROGRESSO_KEY = (nutarefa: number) => `@separacao_progresso_${nutarefa}`;
+const ID_UNICO_MIN_LEN = 18;
+
+const PROGRESSO_KEY = (nutarefa: number) =>
+  `@separacao_progresso_${nutarefa}`;
 
 function formatarEndereco(endereco: string): string {
   if (!endereco) return '';
@@ -102,9 +116,11 @@ const SQL_ITENS_SEPARACAO = (nutarefa: number) => `
   ORDER BY ITT.CODPROD, ITT.CONTROLE
 `;
 
-async function carregarItensSeparacaoLocal(
-  nutarefa: number
-): Promise<{ podeSeparar: boolean; itens: ItemSeparacao[]; bloqueados: ItemSeparacao[] }> {
+async function carregarItensSeparacaoLocal(nutarefa: number): Promise<{
+  podeSeparar: boolean;
+  itens: ItemSeparacao[];
+  bloqueados: ItemSeparacao[];
+}> {
   const result = await queryJson('DbExplorerSP.executeQuery', {
     sql: SQL_ITENS_SEPARACAO(nutarefa),
   });
@@ -165,26 +181,50 @@ export default function SeparacaoItemScreen() {
   const [endereco, setEndereco] = useState('');
   const [lote, setLote] = useState('');
   const [codigoBarras, setCodigoBarras] = useState('');
+  const [idUnico, setIdUnico] = useState('');
 
   const [enderecoDestino, setEnderecoDestino] = useState('');
   const [modalDestinoVisivel, setModalDestinoVisivel] = useState(false);
 
-  // ===== Verificação do endereço de destino (feedback visual) =====
+  // ===== Verificação do endereço de destino =====
   const [statusDestino, setStatusDestino] = useState<StatusDestino>('IDLE');
   const [descrDestino, setDescrDestino] = useState<string>('');
   const [erroVerificacao, setErroVerificacao] = useState<string | null>(null);
+
+  // Histórico de IDs únicos bipados por item
+  const [idsUnicosPorItem, setIdsUnicosPorItem] = useState<
+    Record<string, string[]>
+  >({});
 
   const inputProdutoRef = useRef<TextInput>(null);
   const inputEnderecoRef = useRef<TextInput>(null);
   const inputLoteRef = useRef<TextInput>(null);
   const inputCaptureRef = useRef<TextInput>(null);
+  const inputIdUnicoRef = useRef<TextInput>(null);
 
-  // Buffers síncronos (Enter do leitor pode chegar antes do state atualizar)
+  // Buffers síncronos
   const bufferRef = useRef('');
   const bufferProdutoRef = useRef('');
   const bufferEnderecoRef = useRef('');
   const bufferLoteRef = useRef('');
+  const bufferIdUnicoRef = useRef('');
+
+  // Timers por etapa (debounce do leitor HID)
   const bipTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const bufferProdutoTimerRef =
+    useRef<ReturnType<typeof setTimeout> | null>(null);
+  const bufferEnderecoTimerRef =
+    useRef<ReturnType<typeof setTimeout> | null>(null);
+  const bufferLoteTimerRef =
+    useRef<ReturnType<typeof setTimeout> | null>(null);
+  const bufferIdUnicoTimerRef =
+    useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Ref para a etapa atual (evita closure obsoleto em handlers assíncronos)
+  const etapaRef = useRef<Etapa>('PRODUTO');
+  useEffect(() => {
+    etapaRef.current = etapa;
+  }, [etapa]);
 
   // ==================== BLOQUEIO DO BOTÃO VOLTAR (ANDROID) ====================
 
@@ -210,15 +250,26 @@ export default function SeparacaoItemScreen() {
 
   // ==================== PERSISTÊNCIA ====================
 
+  const itemKey = useCallback(
+    (it: ItemComBipe) => `${it.CODPROD}-${it.LOTE}`,
+    []
+  );
+
   const salvarProgresso = useCallback(
-    async (itensAtuais: ItemComBipe[]) => {
+    async (
+      itensAtuais: ItemComBipe[],
+      etapaAtual: Etapa,
+      idsAtuais: Record<string, string[]>
+    ) => {
       if (!nutarefa) return;
       try {
         const progresso: ProgressoSalvo = {
           nutarefa,
           itens: itensAtuais.map((it) => ({
-            key: `${it.CODPROD}-${it.LOTE}`,
+            key: itemKey(it),
             BIPADO: it.BIPADO,
+            etapa: etapaAtual,
+            idsUnicos: idsAtuais[itemKey(it)] ?? [],
           })),
           salvoEm: Date.now(),
         };
@@ -231,24 +282,32 @@ export default function SeparacaoItemScreen() {
         console.warn('⚠️ Não foi possível salvar progresso:', err);
       }
     },
-    [nutarefa]
+    [nutarefa, itemKey]
   );
 
-  const carregarProgresso = useCallback(async (): Promise<Record<string, number>> => {
-    if (!nutarefa) return {};
+  const carregarProgresso = useCallback(async (): Promise<{
+    mapaBipados: Record<string, number>;
+    mapaEtapas: Record<string, Etapa>;
+    mapaIds: Record<string, string[]>;
+  }> => {
+    if (!nutarefa) return { mapaBipados: {}, mapaEtapas: {}, mapaIds: {} };
     try {
       const raw = await AsyncStorage.getItem(PROGRESSO_KEY(nutarefa));
-      if (!raw) return {};
+      if (!raw) return { mapaBipados: {}, mapaEtapas: {}, mapaIds: {} };
       const parsed: ProgressoSalvo = JSON.parse(raw);
-      const mapa: Record<string, number> = {};
+      const mapaBipados: Record<string, number> = {};
+      const mapaEtapas: Record<string, Etapa> = {};
+      const mapaIds: Record<string, string[]> = {};
       for (const i of parsed.itens) {
-        mapa[i.key] = i.BIPADO;
+        mapaBipados[i.key] = i.BIPADO;
+        if (i.etapa) mapaEtapas[i.key] = i.etapa as Etapa;
+        if (i.idsUnicos) mapaIds[i.key] = i.idsUnicos;
       }
-      console.log('📂 Progresso carregado:', mapa);
-      return mapa;
+      console.log('📂 Progresso carregado:', mapaBipados);
+      return { mapaBipados, mapaEtapas, mapaIds };
     } catch (err) {
       console.warn('⚠️ Não foi possível carregar progresso:', err);
-      return {};
+      return { mapaBipados: {}, mapaEtapas: {}, mapaIds: {} };
     }
   }, [nutarefa]);
 
@@ -275,7 +334,8 @@ export default function SeparacaoItemScreen() {
       if (etapaAtual === 'PRODUTO') inputProdutoRef.current?.focus();
       else if (etapaAtual === 'ENDERECO') inputEnderecoRef.current?.focus();
       else if (etapaAtual === 'LOTE') inputLoteRef.current?.focus();
-      else inputCaptureRef.current?.focus();
+      else if (etapaAtual === 'CODIGO') inputCaptureRef.current?.focus();
+      else inputIdUnicoRef.current?.focus();
     }, 100);
   }, []);
 
@@ -294,9 +354,14 @@ export default function SeparacaoItemScreen() {
 
       try {
         await iniciarSeparacaoWMS(nutarefa);
-        console.log(`▶️ Tarefa ${nutarefa} marcada como em separação (SITUACAO='E')`);
+        console.log(
+          `▶️ Tarefa ${nutarefa} marcada como em separação (SITUACAO='E')`
+        );
       } catch (errIni) {
-        console.warn('⚠️ Não foi possível marcar tarefa como em separação:', errIni);
+        console.warn(
+          '⚠️ Não foi possível marcar tarefa como em separação:',
+          errIni
+        );
       }
 
       const validacao = await carregarItensSeparacaoLocal(nutarefa);
@@ -308,22 +373,36 @@ export default function SeparacaoItemScreen() {
         return;
       }
 
-      const progressoSalvo = await carregarProgresso();
+      const { mapaBipados, mapaEtapas, mapaIds } = await carregarProgresso();
 
       const itensComProgresso: ItemComBipe[] = validacao.itens.map((i) => {
         const key = `${i.CODPROD}-${i.LOTE}`;
-        const bipadoSalvo = progressoSalvo[key] ?? 0;
+        const bipadoSalvo = mapaBipados[key] ?? 0;
         const bipado = Math.min(bipadoSalvo, i.QTD_BIPAR);
         return { ...i, BIPADO: bipado };
       });
 
       setItens(itensComProgresso);
+      setIdsUnicosPorItem(mapaIds);
 
       const primeiroPendente = itensComProgresso.findIndex(
         (it) => it.BIPADO < it.QTD_BIPAR
       );
-      setItemAtivoIndex(primeiroPendente >= 0 ? primeiroPendente : 0);
-      setEtapa('PRODUTO');
+      const idx = primeiroPendente >= 0 ? primeiroPendente : 0;
+      setItemAtivoIndex(idx);
+
+      const key = `${itensComProgresso[idx]?.CODPROD}-${itensComProgresso[idx]?.LOTE}`;
+      const etapaSalva = mapaEtapas[key] as Etapa | undefined;
+
+      const itemPendente =
+        itensComProgresso[idx] &&
+        itensComProgresso[idx].BIPADO < itensComProgresso[idx].QTD_BIPAR;
+
+      if (itemPendente && etapaSalva) {
+        setEtapa(etapaSalva);
+      } else {
+        setEtapa('PRODUTO');
+      }
     } catch (err) {
       console.error('❌ Erro ao carregar itens:', err);
       setError(err instanceof Error ? err.message : 'Erro ao carregar itens');
@@ -333,6 +412,7 @@ export default function SeparacaoItemScreen() {
       bufferProdutoRef.current = '';
       bufferEnderecoRef.current = '';
       bufferLoteRef.current = '';
+      bufferIdUnicoRef.current = '';
     }
   }, [nutarefa, carregarProgresso]);
 
@@ -342,9 +422,15 @@ export default function SeparacaoItemScreen() {
 
   useEffect(() => {
     return () => {
-      if (bipTimerRef.current) {
-        clearTimeout(bipTimerRef.current);
-      }
+      if (bipTimerRef.current) clearTimeout(bipTimerRef.current);
+      if (bufferProdutoTimerRef.current)
+        clearTimeout(bufferProdutoTimerRef.current);
+      if (bufferEnderecoTimerRef.current)
+        clearTimeout(bufferEnderecoTimerRef.current);
+      if (bufferLoteTimerRef.current)
+        clearTimeout(bufferLoteTimerRef.current);
+      if (bufferIdUnicoTimerRef.current)
+        clearTimeout(bufferIdUnicoTimerRef.current);
     };
   }, []);
 
@@ -366,15 +452,8 @@ export default function SeparacaoItemScreen() {
   const todosConcluidos =
     itens.length > 0 && itens.every((it) => it.BIPADO >= it.QTD_BIPAR);
 
-  const limparApenasCodigo = () => {
-    setCodigoBarras('');
-    bufferRef.current = '';
-    if (bipTimerRef.current) {
-      clearTimeout(bipTimerRef.current);
-      bipTimerRef.current = null;
-    }
-    focarCapture();
-  };
+  const itemAtivoCompleto =
+    !!itemAtivo && itemAtivo.BIPADO >= itemAtivo.QTD_BIPAR;
 
   const proximaEtapa = (etapaAtual: Etapa) => {
     switch (etapaAtual) {
@@ -386,6 +465,9 @@ export default function SeparacaoItemScreen() {
         break;
       case 'LOTE':
         setEtapa('CODIGO');
+        break;
+      case 'CODIGO':
+        setEtapa('IDUNICO');
         break;
       default:
         break;
@@ -399,8 +481,8 @@ export default function SeparacaoItemScreen() {
 
     if (próximoIndex === -1) {
       Alert.alert(
-        'Itens concluídos ✅',
-        'Todos os itens da tarefa foram bipados. Confirme a separação.'
+        'Todos os itens foram bipados ✅',
+        'A tarefa está completa. Confirme a separação.'
       );
       return;
     }
@@ -410,15 +492,93 @@ export default function SeparacaoItemScreen() {
     setProduto('');
     setEndereco('');
     setLote('');
+    setCodigoBarras('');
+    setIdUnico('');
     bufferProdutoRef.current = '';
     bufferEnderecoRef.current = '';
     bufferLoteRef.current = '';
-    limparApenasCodigo();
+    bufferRef.current = '';
+    bufferIdUnicoRef.current = '';
+
+    if (bipTimerRef.current) {
+      clearTimeout(bipTimerRef.current);
+      bipTimerRef.current = null;
+    }
+    setTimeout(() => inputProdutoRef.current?.focus(), 100);
   }, [itens, itemAtivoIndex]);
 
-  // ==================== ETAPA 1: PRODUTO (só bipe) ====================
+  // ==================== HANDLERS DE BIPE (padrão HID com debounce) ====================
 
-  const confirmarProduto = () => {
+  const onChangeProduto = (texto: string) => {
+    const limpo = texto.replace(/\s/g, '');
+    setProduto(limpo);
+    bufferProdutoRef.current = limpo;
+
+    if (bufferProdutoTimerRef.current)
+      clearTimeout(bufferProdutoTimerRef.current);
+    if (!limpo) return;
+
+    bufferProdutoTimerRef.current = setTimeout(() => {
+      const valor = bufferProdutoRef.current;
+      bufferProdutoRef.current = '';
+      confirmarProduto(valor);
+      setTimeout(() => inputProdutoRef.current?.focus(), 50);
+    }, 120);
+  };
+
+  const onChangeEndereco = (texto: string) => {
+    const fmt = formatarEndereco(texto);
+    setEndereco(fmt);
+    bufferEnderecoRef.current = fmt;
+
+    if (bufferEnderecoTimerRef.current)
+      clearTimeout(bufferEnderecoTimerRef.current);
+    if (!fmt) return;
+
+    bufferEnderecoTimerRef.current = setTimeout(() => {
+      const valor = bufferEnderecoRef.current;
+      bufferEnderecoRef.current = '';
+      confirmarEndereco(valor);
+      setTimeout(() => inputEnderecoRef.current?.focus(), 50);
+    }, 120);
+  };
+
+  const onChangeLote = (texto: string) => {
+    const limpo = texto.replace(/\s/g, '');
+    setLote(limpo);
+    bufferLoteRef.current = limpo;
+
+    if (bufferLoteTimerRef.current) clearTimeout(bufferLoteTimerRef.current);
+    if (!limpo) return;
+
+    bufferLoteTimerRef.current = setTimeout(() => {
+      const valor = bufferLoteRef.current;
+      bufferLoteRef.current = '';
+      confirmarLote(valor);
+      setTimeout(() => inputLoteRef.current?.focus(), 50);
+    }, 120);
+  };
+
+  const onChangeIdUnico = (texto: string) => {
+    const limpo = texto.replace(/\s/g, '');
+    setIdUnico(limpo);
+    bufferIdUnicoRef.current = limpo;
+
+    if (bufferIdUnicoTimerRef.current)
+      clearTimeout(bufferIdUnicoTimerRef.current);
+    if (!limpo) return;
+
+    bufferIdUnicoTimerRef.current = setTimeout(() => {
+      const valor = bufferIdUnicoRef.current;
+      bufferIdUnicoRef.current = '';
+      confirmarIdUnico(valor);
+      setTimeout(() => inputIdUnicoRef.current?.focus(), 50);
+    }, 120);
+  };
+
+  // ==================== ETAPA 1: PRODUTO ====================
+
+  const confirmarProduto = (valorInformado?: string) => {
     registerUserActivity();
 
     if (!itemAtivo) {
@@ -426,7 +586,19 @@ export default function SeparacaoItemScreen() {
       return;
     }
 
-    const valorBruto = (bufferProdutoRef.current || produto).trim();
+    if (itemAtivoCompleto) {
+      Alert.alert(
+        'Item já completo',
+        'Este item já foi bipado completamente. Avance para o próximo.'
+      );
+      return;
+    }
+
+    const valorBruto = (
+      valorInformado ??
+      bufferProdutoRef.current ??
+      produto
+    ).trim();
     const valor = valorBruto.toUpperCase();
     const esperado = (itemAtivo.REFERENCIA || '').trim().toUpperCase();
 
@@ -459,9 +631,9 @@ export default function SeparacaoItemScreen() {
     proximaEtapa('PRODUTO');
   };
 
-  // ==================== ETAPA 2: ENDEREÇO (só bipe, tolerante a formato) ====================
+  // ==================== ETAPA 2: ENDEREÇO ====================
 
-  const confirmarEndereco = () => {
+  const confirmarEndereco = (valorInformado?: string) => {
     registerUserActivity();
 
     if (!itemAtivo) {
@@ -469,7 +641,19 @@ export default function SeparacaoItemScreen() {
       return;
     }
 
-    const valorDigitado = (bufferEnderecoRef.current || endereco).trim();
+    if (itemAtivoCompleto) {
+      Alert.alert(
+        'Item já completo',
+        'Este item já foi bipado completamente. Avance para o próximo.'
+      );
+      return;
+    }
+
+    const valorDigitado = (
+      valorInformado ??
+      bufferEnderecoRef.current ??
+      endereco
+    ).trim();
     const esperado = (itemAtivo.ENDERECO || '').trim();
 
     if (!valorDigitado) {
@@ -486,14 +670,15 @@ export default function SeparacaoItemScreen() {
       return;
     }
 
-    // formatarEndereco entende tanto '03112102001' quanto '03.11.21.02.001'
     const ok =
       formatarEndereco(valorDigitado) === formatarEndereco(esperado);
 
     if (!ok) {
       Alert.alert(
         'Endereço inválido',
-        `Esperado: ${formatarEndereco(esperado)}\nBipado: ${formatarEndereco(valorDigitado)}`
+        `Esperado: ${formatarEndereco(esperado)}\nBipado: ${formatarEndereco(
+          valorDigitado
+        )}`
       );
       setEndereco('');
       bufferEnderecoRef.current = '';
@@ -505,9 +690,9 @@ export default function SeparacaoItemScreen() {
     proximaEtapa('ENDERECO');
   };
 
-  // ==================== ETAPA 3: LOTE (só bipe) ====================
+  // ==================== ETAPA 3: LOTE ====================
 
-  const confirmarLote = () => {
+  const confirmarLote = (valorInformado?: string) => {
     registerUserActivity();
 
     if (!itemAtivo) {
@@ -515,7 +700,19 @@ export default function SeparacaoItemScreen() {
       return;
     }
 
-    const valorBruto = (bufferLoteRef.current || lote).trim();
+    if (itemAtivoCompleto) {
+      Alert.alert(
+        'Item já completo',
+        'Este item já foi bipado completamente. Avance para o próximo.'
+      );
+      return;
+    }
+
+    const valorBruto = (
+      valorInformado ??
+      bufferLoteRef.current ??
+      lote
+    ).trim();
     const valor = valorBruto.toUpperCase();
     const esperado = (itemAtivo.LOTE || '').trim().toUpperCase();
 
@@ -548,7 +745,7 @@ export default function SeparacaoItemScreen() {
     proximaEtapa('LOTE');
   };
 
-  // ==================== ETAPA 4: CÓDIGO DE BARRAS (N vezes) ====================
+  // ==================== ETAPA 4: CÓDIGO DE BARRAS ====================
 
   const confirmarCodigo = (codigoInformado?: string) => {
     registerUserActivity();
@@ -566,7 +763,7 @@ export default function SeparacaoItemScreen() {
       return;
     }
 
-    if (itemAtivo.BIPADO >= itemAtivo.QTD_BIPAR) {
+    if (itemAtivoCompleto) {
       setCodigoBarras('');
       bufferRef.current = '';
       Alert.alert(
@@ -577,7 +774,11 @@ export default function SeparacaoItemScreen() {
       return;
     }
 
-    const codigo = (codigoInformado ?? bufferRef.current ?? codigoBarras).trim();
+    const codigo = (
+      codigoInformado ??
+      bufferRef.current ??
+      codigoBarras
+    ).trim();
     const esperado = (itemAtivo.CODBARRA || '').trim();
 
     setCodigoBarras('');
@@ -607,27 +808,128 @@ export default function SeparacaoItemScreen() {
       return;
     }
 
-    const novosItens = itens.map((it, idx) =>
-      idx === itemAtivoIndex
-        ? { ...it, BIPADO: Math.min(it.BIPADO + 1, it.QTD_BIPAR) }
-        : it
-    );
+    proximaEtapa('CODIGO');
+  };
 
-    setItens(novosItens);
-    salvarProgresso(novosItens);
+  // ==================== ETAPA 5: ID ÚNICO ====================
 
-    const novoBipado = Math.min(itemAtivo.BIPADO + 1, itemAtivo.QTD_BIPAR);
+  const registrarBipagemIdUnico = useCallback(
+    (id: string, permitirRepetido: boolean) => {
+      if (!itemAtivo) return;
 
-    if (novoBipado >= itemAtivo.QTD_BIPAR) {
-      Alert.alert(
-        'Item completo ✅',
-        `Ref ${itemAtivo.REFERENCIA} / Lote ${itemAtivo.LOTE} finalizado.`
+      const key = itemKey(itemAtivo);
+      const ids = idsUnicosPorItem[key] ?? [];
+
+      if (!permitirRepetido && ids.includes(id)) {
+        Alert.alert(
+          'Sequencial já bipado',
+          `O ID Único "${id}" já foi bipado para este item.\n\nDeseja continuar mesmo assim (contar a bipagem repetida)?`,
+          [
+            { text: 'Não', style: 'cancel' },
+            {
+              text: 'Sim',
+              onPress: () => {
+                registrarBipagemIdUnico(id, true);
+              },
+            },
+          ]
+        );
+        return;
+      }
+
+      const novosItens = itens.map((it, idx) =>
+        idx === itemAtivoIndex
+          ? { ...it, BIPADO: Math.min(it.BIPADO + 1, it.QTD_BIPAR) }
+          : it
       );
-      limparApenasCodigo();
-      setTimeout(() => avançarItem(), 200);
-    } else {
-      limparApenasCodigo();
+
+      const novosIds: Record<string, string[]> = {
+        ...idsUnicosPorItem,
+        [key]: [...ids, id],
+      };
+
+      setItens(novosItens);
+      setIdsUnicosPorItem(novosIds);
+
+      const novoBipado = Math.min(itemAtivo.BIPADO + 1, itemAtivo.QTD_BIPAR);
+
+      salvarProgresso(novosItens, etapaRef.current, novosIds);
+
+      setIdUnico('');
+      bufferIdUnicoRef.current = '';
+      setTimeout(() => inputIdUnicoRef.current?.focus(), 50);
+
+      if (novoBipado >= itemAtivo.QTD_BIPAR) {
+        Alert.alert(
+          'Item completo ✅',
+          `Ref ${itemAtivo.REFERENCIA} / Lote ${itemAtivo.LOTE} finalizado (${novoBipado}/${itemAtivo.QTD_BIPAR}).`
+        );
+        setTimeout(() => avançarItem(), 200);
+      }
+    },
+    [
+      itemAtivo,
+      itens,
+      itemAtivoIndex,
+      idsUnicosPorItem,
+      itemKey,
+      salvarProgresso,
+      avançarItem,
+    ]
+  );
+
+  const confirmarIdUnico = (idInformado?: string) => {
+    registerUserActivity();
+
+    if (bufferIdUnicoTimerRef.current) {
+      clearTimeout(bufferIdUnicoTimerRef.current);
+      bufferIdUnicoTimerRef.current = null;
     }
+
+    if (!itemAtivo) {
+      setIdUnico('');
+      bufferIdUnicoRef.current = '';
+      Alert.alert('Atenção', 'Nenhum item ativo para separar.');
+      inputIdUnicoRef.current?.focus();
+      return;
+    }
+
+    if (itemAtivoCompleto) {
+      setIdUnico('');
+      bufferIdUnicoRef.current = '';
+      Alert.alert(
+        'Item já completo',
+        `Ref ${itemAtivo.REFERENCIA} / Lote ${itemAtivo.LOTE} já foi bipado (${itemAtivo.BIPADO}/${itemAtivo.QTD_BIPAR}).`
+      );
+      inputIdUnicoRef.current?.focus();
+      return;
+    }
+
+    const id = (
+      idInformado ??
+      bufferIdUnicoRef.current ??
+      idUnico
+    ).trim();
+
+    setIdUnico('');
+    bufferIdUnicoRef.current = '';
+
+    if (!id) {
+      Alert.alert('ID Único', 'Bipe o ID Único.');
+      inputIdUnicoRef.current?.focus();
+      return;
+    }
+
+    if (id.length < ID_UNICO_MIN_LEN) {
+      Alert.alert(
+        'ID Único inválido',
+        `O ID Único precisa ter no mínimo ${ID_UNICO_MIN_LEN} caracteres.\n\nBipado: "${id}" (${id.length} caracteres).`
+      );
+      inputIdUnicoRef.current?.focus();
+      return;
+    }
+
+    registrarBipagemIdUnico(id, false);
   };
 
   // ==================== CONCLUIR ====================
@@ -669,7 +971,6 @@ export default function SeparacaoItemScreen() {
       return;
     }
 
-    // Reset do feedback ao abrir o modal
     setEnderecoDestino('');
     setStatusDestino('IDLE');
     setDescrDestino('');
@@ -677,11 +978,6 @@ export default function SeparacaoItemScreen() {
     setModalDestinoVisivel(true);
   };
 
-  /**
-   * Único botão do modal: verifica o endereço e, se estiver LIVRE,
-   * executa a conclusão. Se estiver OCUPADO / não encontrado / erro,
-   * mostra Alert e mantém o modal aberto para o usuário digitar outro.
-   */
   const confirmarConclusao = async () => {
     const digitos = enderecoDestino.replace(/\D/g, '');
     if (digitos.length !== 6) {
@@ -689,7 +985,10 @@ export default function SeparacaoItemScreen() {
       return;
     }
 
-    const enderecoFormatado = `${digitos.slice(0, 2)}.${digitos.slice(2, 4)}.${digitos.slice(4, 6)}`;
+    const enderecoFormatado = `${digitos.slice(0, 2)}.${digitos.slice(
+      2,
+      4
+    )}.${digitos.slice(4, 6)}`;
 
     try {
       setStatusDestino('VERIFICANDO');
@@ -704,7 +1003,7 @@ export default function SeparacaoItemScreen() {
           'Endereço não encontrado',
           `O endereço ${enderecoFormatado} não existe na TGWEND (ou não está ativo/analítico). Digite outro endereço.`
         );
-        return; // mantém o modal aberto
+        return;
       }
 
       if (!check.livre) {
@@ -716,17 +1015,19 @@ export default function SeparacaoItemScreen() {
             check.descr ? ` (${check.descr})` : ''
           } já está ocupado (estoque, pendência ou tarefa em andamento).\n\nDigite outro endereço de destino.`
         );
-        return; // mantém o modal aberto
+        return;
       }
 
-      // ✅ Endereço LIVRE → conclui
       setStatusDestino('LIVRE');
       setDescrDestino(check.descr);
 
       setModalDestinoVisivel(false);
       await executarConclusao(enderecoFormatado, check.codend);
     } catch (err) {
-      console.error('❌ Erro ao verificar/concluir endereço de destino:', err);
+      console.error(
+        '❌ Erro ao verificar/concluir endereço de destino:',
+        err
+      );
       const msg =
         err instanceof Error
           ? err.message
@@ -734,7 +1035,6 @@ export default function SeparacaoItemScreen() {
       setStatusDestino('ERRO');
       setErroVerificacao(msg);
       Alert.alert('Erro', msg);
-      // mantém o modal aberto
     }
   };
 
@@ -746,7 +1046,8 @@ export default function SeparacaoItemScreen() {
       setConcluindo(true);
 
       const codendNovo =
-        codendJaResolvido ?? (await buscarCodEndPorEndereco(enderecoFormatado));
+        codendJaResolvido ??
+        (await buscarCodEndPorEndereco(enderecoFormatado));
 
       if (!codendNovo) {
         Alert.alert(
@@ -780,7 +1081,9 @@ export default function SeparacaoItemScreen() {
         WHERE NUTAREFA = ${Number(itens[0].NUTAREFA)}
           AND SITUACAO <> 'F'
       `;
-      const resSeq = await queryJson('DbExplorerSP.executeQuery', { sql: sqlSeq });
+      const resSeq = await queryJson('DbExplorerSP.executeQuery', {
+        sql: sqlSeq,
+      });
       const sequencias: number[] = (resSeq?.rows ?? [])
         .map((r: any[]) => Number(r[0]) || 0)
         .filter((n: number) => n > 0);
@@ -792,7 +1095,10 @@ export default function SeparacaoItemScreen() {
       }
 
       for (const sequencia of sequencias) {
-        const item = await buscarItemTarefaWMS(itens[0].NUTAREFA, sequencia);
+        const item = await buscarItemTarefaWMS(
+          itens[0].NUTAREFA,
+          sequencia
+        );
         if (!item) continue;
 
         await moverEstoqueItemWMS({
@@ -806,7 +1112,9 @@ export default function SeparacaoItemScreen() {
         });
       }
 
-      const todosOk = await verificarTodosItensFinalizadosWMS(itens[0].NUTAREFA);
+      const todosOk = await verificarTodosItensFinalizadosWMS(
+        itens[0].NUTAREFA
+      );
 
       if (todosOk) {
         await finalizarTarefaWMS({
@@ -904,6 +1212,28 @@ export default function SeparacaoItemScreen() {
     );
   }
 
+  const etapaNumero =
+    etapa === 'PRODUTO'
+      ? '1'
+      : etapa === 'ENDERECO'
+      ? '2'
+      : etapa === 'LOTE'
+      ? '3'
+      : etapa === 'CODIGO'
+      ? '4'
+      : '5';
+
+  const etapaNome =
+    etapa === 'PRODUTO'
+      ? 'Produto'
+      : etapa === 'ENDERECO'
+      ? 'Endereço'
+      : etapa === 'LOTE'
+      ? 'Lote'
+      : etapa === 'CODIGO'
+      ? 'Código de Barras'
+      : 'ID Único';
+
   return (
     <View style={styles.container}>
       {/* Input invisível que captura o bipe do leitor HID (etapa CODIGO) */}
@@ -962,7 +1292,11 @@ export default function SeparacaoItemScreen() {
             <ActivityIndicator size="small" color="white" />
           ) : (
             <>
-              <Ionicons name="close-circle-outline" size={20} color="white" />
+              <Ionicons
+                name="close-circle-outline"
+                size={20}
+                color="white"
+              />
               <Text style={styles.acaoButtonText}>Rejeitar</Text>
             </>
           )}
@@ -983,7 +1317,11 @@ export default function SeparacaoItemScreen() {
             <ActivityIndicator size="small" color="white" />
           ) : (
             <>
-              <Ionicons name="checkmark-done-circle" size={20} color="white" />
+              <Ionicons
+                name="checkmark-done-circle"
+                size={20}
+                color="white"
+              />
               <Text style={styles.acaoButtonText}>Concluir</Text>
             </>
           )}
@@ -1039,29 +1377,11 @@ export default function SeparacaoItemScreen() {
       {/* ETAPAS */}
       <View style={styles.formContainer}>
         <View style={styles.etapaHeader}>
-          <Text style={styles.etapaLabel}>
-            Etapa{' '}
-            {etapa === 'PRODUTO'
-              ? '1'
-              : etapa === 'ENDERECO'
-              ? '2'
-              : etapa === 'LOTE'
-              ? '3'
-              : '4'}{' '}
-            de 4
-          </Text>
-          <Text style={styles.etapaNome}>
-            {etapa === 'PRODUTO'
-              ? 'Produto'
-              : etapa === 'ENDERECO'
-              ? 'Endereço'
-              : etapa === 'LOTE'
-              ? 'Lote'
-              : 'Código de Barras'}
-          </Text>
+          <Text style={styles.etapaLabel}>Etapa {etapaNumero} de 5</Text>
+          <Text style={styles.etapaNome}>{etapaNome}</Text>
         </View>
 
-        {/* ETAPA 1: PRODUTO (só bipe, sem teclado) */}
+        {/* ETAPA 1: PRODUTO */}
         {etapa === 'PRODUTO' && (
           <View style={styles.formRow}>
             <Ionicons name="cube-outline" size={18} color="#FF9800" />
@@ -1072,25 +1392,20 @@ export default function SeparacaoItemScreen() {
               placeholder="Bipe a referência"
               placeholderTextColor="#999"
               value={produto}
-              onChangeText={(texto) => {
-                const limpo = texto.replace(/\s/g, '');
-                setProduto(limpo);
-                bufferProdutoRef.current = limpo;
-              }}
+              onChangeText={onChangeProduto}
               autoCorrect={false}
               autoCapitalize="characters"
               showSoftInputOnFocus={false}
               caretHidden
               contextMenuHidden
               selectTextOnFocus={false}
-              returnKeyType="next"
-              onSubmitEditing={confirmarProduto}
               blurOnSubmit={false}
+              editable={!itemAtivoCompleto}
             />
           </View>
         )}
 
-        {/* ETAPA 2: ENDEREÇO (só bipe, aceita 03112102001 e 03.11.21.02.001) */}
+        {/* ETAPA 2: ENDEREÇO */}
         {etapa === 'ENDERECO' && (
           <View style={styles.formRow}>
             <Ionicons name="location-outline" size={18} color="#FF9800" />
@@ -1101,25 +1416,20 @@ export default function SeparacaoItemScreen() {
               placeholder="Bipe o endereço"
               placeholderTextColor="#999"
               value={endereco}
-              onChangeText={(t) => {
-                const fmt = formatarEndereco(t);
-                setEndereco(fmt);
-                bufferEnderecoRef.current = fmt;
-              }}
+              onChangeText={onChangeEndereco}
               autoCorrect={false}
               autoCapitalize="none"
               showSoftInputOnFocus={false}
               caretHidden
               contextMenuHidden
               selectTextOnFocus={false}
-              returnKeyType="next"
-              onSubmitEditing={confirmarEndereco}
               blurOnSubmit={false}
+              editable={!itemAtivoCompleto}
             />
           </View>
         )}
 
-        {/* ETAPA 3: LOTE (somente bipe, sem teclado) */}
+        {/* ETAPA 3: LOTE */}
         {etapa === 'LOTE' && (
           <View style={styles.formRow}>
             <Ionicons name="barcode-outline" size={18} color="#FF9800" />
@@ -1130,25 +1440,20 @@ export default function SeparacaoItemScreen() {
               placeholder="Bipe o lote"
               placeholderTextColor="#999"
               value={lote}
-              onChangeText={(texto) => {
-                const limpo = texto.replace(/\s/g, '');
-                setLote(limpo);
-                bufferLoteRef.current = limpo;
-              }}
+              onChangeText={onChangeLote}
               autoCorrect={false}
               autoCapitalize="characters"
               showSoftInputOnFocus={false}
               caretHidden
               contextMenuHidden
               selectTextOnFocus={false}
-              returnKeyType="next"
-              onSubmitEditing={confirmarLote}
               blurOnSubmit={false}
+              editable={!itemAtivoCompleto}
             />
           </View>
         )}
 
-        {/* ETAPA 4: CÓDIGO DE BARRAS (N vezes) */}
+        {/* ETAPA 4: CÓDIGO DE BARRAS */}
         {etapa === 'CODIGO' && (
           <View style={styles.formRow}>
             <Ionicons name="qr-code-outline" size={18} color="#FF9800" />
@@ -1161,20 +1466,50 @@ export default function SeparacaoItemScreen() {
           </View>
         )}
 
+        {/* ETAPA 5: ID ÚNICO */}
+        {etapa === 'IDUNICO' && (
+          <View style={styles.formRow}>
+            <Ionicons name="finger-print" size={18} color="#FF9800" />
+            <Text style={styles.formLabel}>ID Único:</Text>
+            <TextInput
+              ref={inputIdUnicoRef}
+              style={styles.formInputLote}
+              placeholder="Bipe o ID Único"
+              placeholderTextColor="#999"
+              value={idUnico}
+              onChangeText={onChangeIdUnico}
+              autoCorrect={false}
+              autoCapitalize="none"
+              showSoftInputOnFocus={false}
+              caretHidden
+              contextMenuHidden
+              selectTextOnFocus={false}
+              blurOnSubmit={false}
+              editable={!itemAtivoCompleto}
+            />
+          </View>
+        )}
+
         <TouchableOpacity
           style={styles.confirmarButton}
           activeOpacity={0.8}
           focusable={false}
+          disabled={itemAtivoCompleto}
           onPress={() => {
             if (etapa === 'PRODUTO') confirmarProduto();
             else if (etapa === 'ENDERECO') confirmarEndereco();
             else if (etapa === 'LOTE') confirmarLote();
-            else confirmarCodigo();
+            else if (etapa === 'CODIGO') confirmarCodigo();
+            else confirmarIdUnico();
           }}
         >
           <Ionicons name="checkmark-circle" size={20} color="white" />
           <Text style={styles.confirmarButtonText}>
-            {etapa === 'CODIGO' ? 'Confirmar bipe' : 'Confirmar'}
+            {etapa === 'CODIGO'
+              ? 'Confirmar bipe'
+              : etapa === 'IDUNICO'
+              ? 'Confirmar ID Único'
+              : 'Confirmar'}
           </Text>
         </TouchableOpacity>
       </View>
@@ -1211,7 +1546,7 @@ export default function SeparacaoItemScreen() {
         </View>
       )}
 
-      {/* Modal: endereço de destino (Confirmar verifica e conclui) */}
+      {/* Modal: endereço de destino */}
       <Modal
         visible={modalDestinoVisivel}
         transparent
@@ -1240,7 +1575,6 @@ export default function SeparacaoItemScreen() {
                   .join('.');
                 setEnderecoDestino(fmt);
 
-                // Qualquer alteração limpa o feedback anterior
                 if (statusDestino !== 'IDLE') {
                   setStatusDestino('IDLE');
                   setDescrDestino('');
@@ -1252,7 +1586,6 @@ export default function SeparacaoItemScreen() {
               editable={statusDestino !== 'VERIFICANDO'}
             />
 
-            {/* Feedback do status (aparece após tentar confirmar) */}
             {statusDestino === 'OCUPADO' && (
               <View style={styles.statusBoxOcupado}>
                 <Ionicons name="close-circle" size={18} color="#C62828" />
@@ -1276,7 +1609,8 @@ export default function SeparacaoItemScreen() {
               <View style={styles.statusBoxOcupado}>
                 <Ionicons name="alert-circle" size={18} color="#C62828" />
                 <Text style={styles.statusTextOcupado}>
-                  {erroVerificacao || 'Falha ao verificar o endereço. Tente novamente.'}
+                  {erroVerificacao ||
+                    'Falha ao verificar o endereço. Tente novamente.'}
                 </Text>
               </View>
             )}
@@ -1593,7 +1927,6 @@ const styles = StyleSheet.create({
     marginBottom: 12,
   },
 
-  // Feedback de status (só aparece após tentar confirmar)
   statusBoxOcupado: {
     flexDirection: 'row',
     alignItems: 'center',
