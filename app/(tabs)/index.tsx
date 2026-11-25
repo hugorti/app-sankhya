@@ -110,7 +110,7 @@ export default function HomeScreen() {
       <View style={styles.header}>
         <Image
           alt="Logo"
-          source={require('../../assets/images/logobranco.png')}
+          source={require('../../assets/images/logobranco3.png')}
           style={styles.logoImage}
         />
         <View style={styles.userInfo}>
@@ -150,8 +150,8 @@ export default function HomeScreen() {
             >
               <View style={[styles.card, { backgroundColor: '#2196F3' }]}>
                 <Ionicons name="checkmark-done-outline" size={36} color="white" />
-                <Text style={styles.cardText}>Conferência</Text>
-                <Text style={styles.cardSubtext}>Verificar produtos</Text>
+                <Text style={styles.cardText}>Expedições</Text>
+                <Text style={styles.cardSubtext}>Lista de conferencias</Text>
               </View>
             </TouchableOpacity>
           </View>

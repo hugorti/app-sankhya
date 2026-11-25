@@ -135,7 +135,7 @@ export default function LoginScreen() {
       <View style={styles.logoContainer}>
         <Image
           alt="Logo"
-          source={require('../assets/images/logogrande.png')}
+          source={require('../assets/images/logogrande2.png')}
           style={styles.logoImage}
         />
         <Text style={styles.subtitle}>Sistema de Gestão</Text>
@@ -208,7 +208,7 @@ export default function LoginScreen() {
       </TouchableOpacity>
 
       <View style={styles.footer}>
-        <Text style={styles.footerText}>Versão 2.0.2</Text>
+        <Text style={styles.footerText}>Versão 3.0.1</Text>
       </View>
     </SafeAreaView>
   );
