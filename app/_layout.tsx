@@ -1,21 +1,15 @@
 // app/_layout.tsx
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { Stack } from 'expo-router';
-import { useSession } from '../hooks/useSession';
-import { ActivityIndicator, View, StyleSheet } from 'react-native';
+import { useEffect } from 'react';
+import { initializeAPI } from '../services/api';
 
 export default function RootLayout() {
-  const { loading } = useSession();
-
-  // ⏳ Só mostra loading enquanto a sessão inicial está sendo carregada do AsyncStorage.
-  // NÃO redireciona aqui — o login.tsx e o (tabs)/index.tsx cuidam disso.
-  if (loading) {
-    return (
-      <View style={styles.loadingContainer}>
-        <ActivityIndicator size="large" color="#7E469B" />
-      </View>
-    );
-  }
+  useEffect(() => {
+    initializeAPI().catch((err) => {
+      console.error('❌ initializeAPI:', err);
+    });
+  }, []);
 
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>
@@ -30,12 +24,3 @@ export default function RootLayout() {
     </GestureHandlerRootView>
   );
 }
-
-const styles = StyleSheet.create({
-  loadingContainer: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-    backgroundColor: '#f8f9fa',
-  },
-});

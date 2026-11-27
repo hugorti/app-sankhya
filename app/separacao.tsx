@@ -277,7 +277,7 @@ export default function SeparacaoScreen() {
         })
       );
 
-      // Remove as já concluídas (AD_SEPARACAOWMS)
+      // Remove as já concluídas (AD_SEPARACAOWMS com STATUS='S')
       const concluidas = await verificarTarefasConcluidas(
         separacoesBase.map((s) => s.NUTAREFA)
       );

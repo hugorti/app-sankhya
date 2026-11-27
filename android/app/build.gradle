@@ -93,7 +93,7 @@ android {
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
         versionCode 3  // sempre aumentar ao gerar nova versão
-        versionName "1.0.2"
+        versionName "3.0.1"
     }
 
     signingConfigs {

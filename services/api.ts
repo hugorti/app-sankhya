@@ -268,13 +268,46 @@ export const initializeAPI = async (): Promise<void> => {
     console.log(`✅ API inicializada com URL: ${config.BASE_URL}`);
 
     const session = await AsyncStorage.getItem('sankhya_session');
-    if (session) {
-      const sessionData = JSON.parse(session);
-      if (sessionData.username) {
-        setCurrentUser(sessionData.username);
-        console.log('👤 Usuário recuperado da sessão');
-      }
+    if (!session) {
+      console.log('ℹ️ Nenhuma sessão salva — usuário deverá logar');
+      return;
     }
+
+    let sessionData: any;
+    try {
+      sessionData = JSON.parse(session);
+    } catch {
+      console.warn('⚠️ Sessão corrompida — limpando');
+      await AsyncStorage.removeItem('sankhya_session');
+      await authService.clearAllUserTokens();
+      return;
+    }
+
+    const estruturaOk =
+      !!sessionData?.username &&
+      !!sessionData?.jsessionid &&
+      !!sessionData?.idusu;
+
+    if (!estruturaOk) {
+      console.warn('⚠️ Sessão inválida (faltam campos) — limpando');
+      await AsyncStorage.removeItem('sankhya_session');
+      await authService.clearAllUserTokens();
+      return;
+    }
+
+    authService.setCurrentUser(sessionData.username);
+
+    const tokenOk = await authService.isTokenValid();
+
+    if (!tokenOk) {
+      console.warn('⚠️ Token expirado/ausente — limpando sessão');
+      await AsyncStorage.removeItem('sankhya_session');
+      await authService.clearAllUserTokens();
+      return;
+    }
+
+    setCurrentUser(sessionData.username);
+    console.log('👤 Usuário recuperado da sessão (token válido)');
   } catch (error) {
     console.error('Failed to initialize API:', error);
     throw error;
@@ -768,48 +801,6 @@ export interface ValidacaoEstoque {
   bloqueados: ItemSeparacao[];
 }
 
-export const salvarSeparacaoWMS = async (data: {
-  NUNOTA: number;
-  NUTAREFA: number;
-  NUSEPARACAO: number;
-  ORDEMCARGA: number;
-  CODPROD: number;
-  DESCRPROD: string;
-  REFERENCIA: string;
-  CONTROLE: string;
-  VOLUMES: string;
-  USUARIO: string;
-}): Promise<any> => {
-  const requestBody = {
-    dataSet: {
-      rootEntity: 'AD_SEPARACAOWMS',
-      includePresentationFields: 'N',
-      dataRow: {
-        localFields: {
-          NUNOTA: { $: data.NUNOTA },
-          NUTAREFA: { $: data.NUTAREFA },
-          NUSEPARACAO: { $: data.NUSEPARACAO },
-          ORDEMCARGA: { $: data.ORDEMCARGA },
-          CODPROD: { $: data.CODPROD },
-          DESCRPROD: { $: data.DESCRPROD },
-          REFERENCIA: { $: data.REFERENCIA },
-          CONTROLE: { $: data.CONTROLE },
-          VOLUMES: { $: data.VOLUMES },
-          USUARIO: { $: data.USUARIO },
-        },
-      },
-      entity: {
-        fieldset: {
-          list:
-            'NUNOTA,NUTAREFA,NUSEPARACAO,ORDEMCARGA,CODPROD,DESCRPROD,REFERENCIA,CONTROLE,VOLUMES,USUARIO',
-        },
-      },
-    },
-  };
-
-  return await queryJson('CRUDServiceProvider.saveRecord', requestBody);
-};
-
 const buscarSequenciasTarefa = async (nutarefa: number): Promise<number[]> => {
   const sql = `
     SELECT SEQUENCIA
@@ -908,11 +899,251 @@ export const rejeitarSeparacaoWMS = async (nutarefa: number): Promise<any> => {
   return { atualizados: sequencias.length, resultados };
 };
 
-// ==================== SEPARAÇÃO — MOVIMENTAÇÃO DE ESTOQUE ====================
+// ==================== CONTROLE DE STATUS DA SEPARAÇÃO (LABOTRAT) ====================
+//
+// Fluxo em AD_SEPARACAOWMS:
+//   INICIAR  → cria a linha COMPLETA (todos os campos) com STATUS='A', VOLUMES=''
+//   CONCLUIR → atualiza apenas VOLUMES + STATUS='S'
+//   REJEITAR → atualiza apenas STATUS='X'
+//
+// ⚠️ A linha é criada UMA vez, no iniciar, com TODOS os campos (NUNOTA,
+//    NUTAREFA, NUSEPARACAO, ORDEMCARGA, CODPROD, DESCRPROD, REFERENCIA,
+//    CONTROLE, USUARIO, STATUS). O VOLUMES só é preenchido no concluir.
+//
+// ⚠️ Concluir e rejeitar SÓ fazem UPDATE na linha existente (buscada por
+//    CODIGO). Nunca INSERT — assim não há duplicata.
+//
+// ⚠️ O Sankhya não permite DELETE via API. Rejeitar marca STATUS='X' e
+//    as triggers LABOTRAT ignoram 'X' (só reagem a 'A' ou 'S').
+
+const normalizarControle = (c: string | null | undefined): string =>
+  (c ?? '').trim();
+
+const buscarCodigoLinhaSeparacao = async (
+  nutarefa: number,
+  codprod: number,
+  controle: string
+): Promise<number | null> => {
+  const controleNorm = normalizarControle(controle).replace(/'/g, "''");
+  const sql = `
+    SELECT TOP 1 CODIGO
+    FROM SANKHYA.AD_SEPARACAOWMS
+    WHERE NUTAREFA = ${Number(nutarefa)}
+      AND CODPROD  = ${Number(codprod)}
+      AND ISNULL(LTRIM(RTRIM(CONTROLE)), '') = '${controleNorm}'
+  `;
+  const res = await queryJson('DbExplorerSP.executeQuery', { sql });
+  const rows: any[] = res?.rows ?? [];
+  return rows.length > 0 ? Number(rows[0][0]) : null;
+};
 
 /**
- * Converte um endereço (XX.XX.XX) em CODEND.
+ * Cria a linha COMPLETA de um item com STATUS='A' e VOLUMES=''.
+ * Se já existir (mesmo NUTAREFA+CODPROD+CONTROLE), faz UPDATE mantendo
+ * todos os dados e reiniciando STATUS='A' (caso venha de 'X' de rejeição).
  */
+const criarLinhaSeparacao = async (data: {
+  NUNOTA: number;
+  NUTAREFA: number;
+  NUSEPARACAO: number;
+  ORDEMCARGA: number;
+  CODPROD: number;
+  DESCRPROD: string;
+  REFERENCIA: string;
+  CONTROLE: string;
+  USUARIO: string;
+}): Promise<void> => {
+  const CONTROLE = normalizarControle(data.CONTROLE);
+
+  const codigoExistente = await buscarCodigoLinhaSeparacao(
+    data.NUTAREFA,
+    data.CODPROD,
+    CONTROLE
+  );
+
+  const dataRow: any = {
+    localFields: {
+      NUNOTA: { $: data.NUNOTA },
+      NUTAREFA: { $: data.NUTAREFA },
+      NUSEPARACAO: { $: data.NUSEPARACAO },
+      ORDEMCARGA: { $: data.ORDEMCARGA },
+      CODPROD: { $: data.CODPROD },
+      DESCRPROD: { $: data.DESCRPROD || '' },
+      REFERENCIA: { $: data.REFERENCIA || '' },
+      CONTROLE: { $: CONTROLE },
+      USUARIO: { $: data.USUARIO || '' },
+      VOLUMES: { $: '' },
+      STATUS: { $: 'A' },
+    },
+  };
+
+  if (codigoExistente) {
+    dataRow.key = { CODIGO: { $: codigoExistente } };
+  }
+
+  const requestBody = {
+    dataSet: {
+      rootEntity: 'AD_SEPARACAOWMS',
+      includePresentationFields: 'N',
+      dataRow,
+      entity: {
+        fieldset: {
+          list:
+            'CODIGO,NUNOTA,NUTAREFA,NUSEPARACAO,ORDEMCARGA,CODPROD,DESCRPROD,REFERENCIA,CONTROLE,VOLUMES,USUARIO,STATUS',
+        },
+      },
+    },
+  };
+
+  await queryJson('CRUDServiceProvider.saveRecord', requestBody);
+};
+
+/**
+ * INICIAR: cria a linha COMPLETA de cada item da tarefa com STATUS='A'.
+ * Grava NUNOTA, NUTAREFA, NUSEPARACAO, ORDEMCARGA, CODPROD, DESCRPROD,
+ * REFERENCIA, CONTROLE, USUARIO. VOLUMES fica vazio (só no concluir).
+ */
+export const marcarSeparacaoIniciada = async (
+  nutarefa: number,
+  usuario: string
+): Promise<void> => {
+  const sqlItens = `
+    SELECT
+        ISNULL(TSEP.NUNOTA, 0)        AS NUNOTA,
+        ITT.NUTAREFA,
+        ISNULL(TSEP.NUSEPARACAO, 0)   AS NUSEPARACAO,
+        ISNULL(TSEP.ORDEMCARGA, 0)    AS ORDEMCARGA,
+        ITT.CODPROD,
+        ISNULL(P.DESCRPROD, '')       AS DESCRPROD,
+        ISNULL(P.REFERENCIA, '')      AS REFERENCIA,
+        ISNULL(ITT.CONTROLE, '')      AS CONTROLE
+    FROM SANKHYA.TGWITT ITT
+    INNER JOIN SANKHYA.TGWSEP TSEP
+        ON TSEP.NUTAREFA = ITT.NUTAREFA
+    LEFT JOIN SANKHYA.TGFPRO P
+        ON P.CODPROD = ITT.CODPROD
+    WHERE ITT.NUTAREFA = ${Number(nutarefa)}
+  `;
+  const resItens = await queryJson('DbExplorerSP.executeQuery', {
+    sql: sqlItens,
+  });
+  const itens: any[] = resItens?.rows ?? [];
+
+  if (itens.length === 0) {
+    throw new Error(`Nenhum item encontrado para NUTAREFA ${nutarefa}`);
+  }
+
+  for (const row of itens) {
+    await criarLinhaSeparacao({
+      NUNOTA: Number(row[0]) || 0,
+      NUTAREFA: Number(row[1]) || 0,
+      NUSEPARACAO: Number(row[2]) || 0,
+      ORDEMCARGA: Number(row[3]) || 0,
+      CODPROD: Number(row[4]) || 0,
+      DESCRPROD: row[5] || '',
+      REFERENCIA: row[6] || '',
+      CONTROLE: row[7] || '',
+      USUARIO: usuario,
+    });
+  }
+};
+
+/**
+ * CONCLUIR: atualiza VOLUMES + STATUS='S' em cada linha da tarefa.
+ *
+ * `volumesPorItem`: mapa key = `${CODPROD}-${CONTROLE}` → "bipado / total"
+ * (ou qualquer string que você queira gravar em VOLUMES).
+ */
+export const marcarSeparacaoFinalizada = async (
+  nutarefa: number,
+  volumesPorItem: Record<string, string>
+): Promise<void> => {
+  const sql = `
+    SELECT CODIGO, CODPROD, ISNULL(CONTROLE, '') AS CONTROLE
+    FROM SANKHYA.AD_SEPARACAOWMS
+    WHERE NUTAREFA = ${Number(nutarefa)}
+  `;
+  const res = await queryJson('DbExplorerSP.executeQuery', { sql });
+  const rows: any[] = res?.rows ?? [];
+
+  if (rows.length === 0) {
+    throw new Error(
+      `Linha de status não encontrada para NUTAREFA ${nutarefa}.`
+    );
+  }
+
+  for (const row of rows) {
+    const codigo = Number(row[0]) || 0;
+    const codprod = Number(row[1]) || 0;
+    const controle = normalizarControle(row[2]);
+
+    const chave = `${codprod}-${controle}`;
+    const volumes = volumesPorItem[chave] ?? '';
+
+    const requestBody = {
+      dataSet: {
+        rootEntity: 'AD_SEPARACAOWMS',
+        includePresentationFields: 'N',
+        dataRow: {
+          key: { CODIGO: { $: codigo } },
+          localFields: {
+            VOLUMES: { $: volumes },
+            STATUS: { $: 'S' },
+          },
+        },
+        entity: {
+          fieldset: { list: 'CODIGO,VOLUMES,STATUS' },
+        },
+      },
+    };
+
+    await queryJson('CRUDServiceProvider.saveRecord', requestBody);
+  }
+};
+
+/**
+ * REJEITAR: marca STATUS='X' em todas as linhas da tarefa.
+ * A linha permanece com todos os dados — só o STATUS muda.
+ */
+export const limparSeparacao = async (nutarefa: number): Promise<void> => {
+  const sql = `
+    SELECT CODIGO
+    FROM SANKHYA.AD_SEPARACAOWMS
+    WHERE NUTAREFA = ${Number(nutarefa)}
+  `;
+  const res = await queryJson('DbExplorerSP.executeQuery', { sql });
+  const rows: any[] = res?.rows ?? [];
+
+  if (rows.length === 0) {
+    console.warn(
+      `⚠️ Nenhuma linha para NUTAREFA ${nutarefa} — nada a limpar.`
+    );
+    return;
+  }
+
+  for (const row of rows) {
+    const codigo = Number(row[0]) || 0;
+
+    const requestBody = {
+      dataSet: {
+        rootEntity: 'AD_SEPARACAOWMS',
+        includePresentationFields: 'N',
+        dataRow: {
+          key: { CODIGO: { $: codigo } },
+          localFields: { STATUS: { $: 'X' } },
+        },
+        entity: {
+          fieldset: { list: 'CODIGO,STATUS' },
+        },
+      },
+    };
+
+    await queryJson('CRUDServiceProvider.saveRecord', requestBody);
+  }
+};
+
+// ==================== SEPARAÇÃO — MOVIMENTAÇÃO DE ESTOQUE ====================
+
 export const buscarCodEndPorEndereco = async (
   endereco: string
 ): Promise<number | null> => {
@@ -933,19 +1164,6 @@ export const buscarCodEndPorEndereco = async (
   return Number(rows[0][0]) || null;
 };
 
-/**
- * Verifica se um endereço de checkout está LIVRE ou OCUPADO.
- *
- * Regras de "OCUPADO":
- *  - Existe linha na TGWEST com ESTOQUE > 0, ENTRADASPEND > 0 ou SAIDASPEND > 0
- *    para o CODEND consultado; OU
- *  - Existe item na TGWITT com CODENDDESTINO = CODEND cuja Tarefa (TGWTAR)
- *    ainda não está finalizada ('F') nem cancelada ('C').
- *
- * Retorna também o CODEND e a descrição (DESCREND) quando encontrado.
- * Quando o endereço não existe em TGWEND (ou não está ativo/analítico),
- * retorna { livre: false, codend: null, descr: '' }.
- */
 export const verificarEnderecoLivre = async (
   enderecoFormatado: string
 ): Promise<{ livre: boolean; codend: number | null; descr: string }> => {
@@ -999,9 +1217,6 @@ export const verificarEnderecoLivre = async (
   };
 };
 
-/**
- * Dados de um item da TGWITT.
- */
 export const buscarItemTarefaWMS = async (
   nutarefa: number,
   sequencia: number
@@ -1032,9 +1247,6 @@ export const buscarItemTarefaWMS = async (
   };
 };
 
-/**
- * Fator de conversão (TGFVOA.QUANTIDADE) do produto para uma unidade.
- */
 export const buscarFatorConversaoWMS = async (
   codprod: number,
   codvol: string
@@ -1051,14 +1263,6 @@ export const buscarFatorConversaoWMS = async (
   return Number(rows[0][0]) || 1;
 };
 
-/**
- * Ajusta o estoque na TGWEST via entidade CRUD EstoqueEndereco.
- * PK composta: CODEMP + CODEND + CODPROD + CONTROLE.
- * Se a linha existir faz UPDATE; senão INSERT.
- * Recalcula ESTOQUEVOLPAD conforme CODVOL:
- *   - 'CX' → ESTOQUEVOLPAD = ESTOQUE * TGFVOA.QUANTIDADE ('UN')
- *   - outros → ESTOQUEVOLPAD = ESTOQUE
- */
 export const ajustarEstoqueWMS = async (data: {
   CODEND: number;
   CODPROD: number;
@@ -1066,11 +1270,8 @@ export const ajustarEstoqueWMS = async (data: {
   QTDDEST: number;
   OPERACAO: 'SOMA' | 'SUBTRAI';
 }): Promise<void> => {
-  // CODEMP fixo = 2 (empresa do WMS). Se precisar suportar multiempresa,
-  // passe o CODEMP por parâmetro.
   const CODEMP = 2;
 
-  // 1) Verifica se a linha existe (para decidir UPDATE x INSERT)
   const sqlBusca = `
     SELECT
       ISNULL(ESTOQUE, 0)       AS ESTOQUE,
@@ -1094,7 +1295,6 @@ export const ajustarEstoqueWMS = async (data: {
     codvol = rows[0][1] || 'UN';
   }
 
-  // 2) Calcula novo estoque
   const novoEstoque =
     data.OPERACAO === 'SOMA'
       ? estoqueAtual + data.QTDDEST
@@ -1102,14 +1302,12 @@ export const ajustarEstoqueWMS = async (data: {
 
   const estoqueFinal = novoEstoque < 0 ? 0 : novoEstoque;
 
-  // 3) Calcula ESTOQUEVOLPAD
   let estoqueVolPad = estoqueFinal;
   if (codvol === 'CX') {
     const fator = await buscarFatorConversaoWMS(data.CODPROD, 'UN');
     estoqueVolPad = estoqueFinal * fator;
   }
 
-  // 4) Monta o payload com PK completa (CODEMP + CODEND + CODPROD + CONTROLE)
   const requestBody = {
     dataSet: {
       rootEntity: 'EstoqueEndereco',
@@ -1178,9 +1376,6 @@ export const moverEstoqueItemWMS = async (data: {
   await queryJson('CRUDServiceProvider.saveRecord', requestBody);
 };
 
-/**
- * Verifica se todos os itens da tarefa estão com SITUACAO = 'F' na TGWITT.
- */
 export const verificarTodosItensFinalizadosWMS = async (
   nutarefa: number
 ): Promise<boolean> => {
@@ -1198,10 +1393,6 @@ export const verificarTodosItensFinalizadosWMS = async (
   return total > 0 && total === finalizados;
 };
 
-/**
- * Finaliza a Tarefa (TGWTAR) e a Separação (TGWSEP) quando todos
- * os itens da NUTAREFA foram concluídos.
- */
 export const finalizarTarefaWMS = async (data: {
   NUTAREFA: number;
   NUSEPARACAO: number;
@@ -1256,6 +1447,7 @@ export const verificarSeparacaoConcluida = async (
     SELECT COUNT(*) AS QTD
     FROM AD_SEPARACAOWMS
     WHERE NUTAREFA = ${Number(nutarefa)}
+      AND STATUS = 'S'
   `;
 
   const result = await queryJson('DbExplorerSP.executeQuery', { sql });
@@ -1273,6 +1465,7 @@ export const verificarTarefasConcluidas = async (
     SELECT DISTINCT NUTAREFA
     FROM AD_SEPARACAOWMS
     WHERE NUTAREFA IN (${lista})
+      AND STATUS = 'S'
   `;
 
   const result = await queryJson('DbExplorerSP.executeQuery', { sql });

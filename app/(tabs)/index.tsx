@@ -150,8 +150,8 @@ export default function HomeScreen() {
             >
               <View style={[styles.card, { backgroundColor: '#2196F3' }]}>
                 <Ionicons name="checkmark-done-outline" size={36} color="white" />
-                <Text style={styles.cardText}>Expedições</Text>
-                <Text style={styles.cardSubtext}>Lista de conferencias</Text>
+                <Text style={styles.cardText}>Lista de</Text>
+                <Text style={styles.cardSubtext}>Expedições realizadas</Text>
               </View>
             </TouchableOpacity>
           </View>

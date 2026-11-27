@@ -2,7 +2,7 @@
   "expo": {
     "name": "WMS Labotrat",
     "slug": "wms",
-    "version": "1.0.2",
+    "version": "3.0.1",
     "orientation": "portrait",
     "icon": "./assets/images/logowms.png",
     "scheme": "wms",

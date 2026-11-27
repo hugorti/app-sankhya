@@ -16,7 +16,6 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { useLocalSearchParams, useRouter, useFocusEffect } from 'expo-router';
 import {
   queryJson,
-  salvarSeparacaoWMS,
   iniciarSeparacaoWMS,
   rejeitarSeparacaoWMS,
   buscarCodEndPorEndereco,
@@ -27,6 +26,10 @@ import {
   verificarEnderecoLivre,
   ItemSeparacao,
   registerUserActivity,
+  // ↓ Controle de STATUS em AD_SEPARACAOWMS
+  marcarSeparacaoIniciada,
+  marcarSeparacaoFinalizada,
+  limparSeparacao,
 } from '@/services/api';
 import { useSession } from '@/hooks/useSession';
 import { Ionicons } from '@expo/vector-icons';
@@ -348,11 +351,30 @@ export default function SeparacaoItemScreen() {
       return;
     }
 
+    if (!session?.username) {
+      setError('Sessão não disponível');
+      setLoading(false);
+      return;
+    }
+
     try {
       setLoading(true);
       setError(null);
 
+      // =========================================================
+      // ⚠️ ORDEM OBRIGATÓRIA:
+      // 1) marcarSeparacaoIniciada  → grava a linha COMPLETA de cada item
+      //    em AD_SEPARACAOWMS com STATUS='A' (NUNOTA, NUTAREFA, NUSEPARACAO,
+      //    ORDEMCARGA, CODPROD, DESCRPROD, REFERENCIA, CONTROLE, USUARIO).
+      // 2) iniciarSeparacaoWMS      → UPDATE TGWITT SITUACAO='E'
+      //    (a trigger SEPARACAO_LABOTRAT só dispara se STATUS='A' existir)
+      // =========================================================
       try {
+        await marcarSeparacaoIniciada(nutarefa, session.username);
+        console.log(
+          `🅰️ Linhas de controle criadas com STATUS='A' para NUTAREFA ${nutarefa}`
+        );
+
         await iniciarSeparacaoWMS(nutarefa);
         console.log(
           `▶️ Tarefa ${nutarefa} marcada como em separação (SITUACAO='E')`
@@ -414,7 +436,7 @@ export default function SeparacaoItemScreen() {
       bufferLoteRef.current = '';
       bufferIdUnicoRef.current = '';
     }
-  }, [nutarefa, carregarProgresso]);
+  }, [nutarefa, session?.username, carregarProgresso]);
 
   useEffect(() => {
     carregar();
@@ -1058,22 +1080,24 @@ export default function SeparacaoItemScreen() {
         return;
       }
 
-      const usuario = session!.username;
-
+      // Monta o mapa de VOLUMES por item (chave = CODPROD-CONTROLE)
+      const volumesPorItem: Record<string, string> = {};
       for (const it of itens) {
-        await salvarSeparacaoWMS({
-          NUNOTA: it.NUNOTA,
-          NUTAREFA: it.NUTAREFA,
-          NUSEPARACAO: it.NUSEPARACAO,
-          ORDEMCARGA: it.OC,
-          CODPROD: it.CODPROD,
-          DESCRPROD: it.DESCRPROD,
-          REFERENCIA: it.REFERENCIA,
-          CONTROLE: it.LOTE,
-          VOLUMES: `${it.BIPADO} / ${it.QTD_BIPAR}`,
-          USUARIO: usuario,
-        });
+        const key = `${it.CODPROD}-${(it.LOTE || '').trim()}`;
+        volumesPorItem[key] = `${it.BIPADO} / ${it.QTD_BIPAR}`;
       }
+
+      // =========================================================
+      // ⚠️ ORDEM OBRIGATÓRIA:
+      // 1) marcarSeparacaoFinalizada → atualiza VOLUMES + STATUS='S'
+      //    nas linhas já existentes de AD_SEPARACAOWMS.
+      //    Precisa vir ANTES dos moverEstoqueItemWMS, senão as
+      //    triggers MOVESTOQUE_LABOTRAT e FINALIZA_LABOTRAT não disparam.
+      // =========================================================
+      await marcarSeparacaoFinalizada(itens[0].NUTAREFA, volumesPorItem);
+      console.log(
+        `🅢 STATUS='S' + VOLUMES gravados para NUTAREFA ${itens[0].NUTAREFA}`
+      );
 
       const sqlSeq = `
         SELECT SEQUENCIA
@@ -1094,6 +1118,7 @@ export default function SeparacaoItemScreen() {
         return;
       }
 
+      // 3) Move estoque item a item (dispara MOVESTOQUE + FINALIZA)
       for (const sequencia of sequencias) {
         const item = await buscarItemTarefaWMS(
           itens[0].NUTAREFA,
@@ -1162,8 +1187,20 @@ export default function SeparacaoItemScreen() {
             try {
               setRejeitando(true);
 
+              // =========================================================
+              // ⚠️ ORDEM OBRIGATÓRIA:
+              // 1) rejeitarSeparacaoWMS → UPDATE TGWITT SITUACAO='A'
+              //    (a trigger de rejeição dentro da SEPARACAO_LABOTRAT
+              //     precisa que STATUS='A' ainda exista em AD_SEPARACAOWMS)
+              // 2) limparSeparacao → STATUS='X' (Sankhya não permite DELETE)
+              // =========================================================
               await rejeitarSeparacaoWMS(nutarefa);
               console.log(`◀️ Tarefa ${nutarefa} rejeitada (SITUACAO='A')`);
+
+              await limparSeparacao(nutarefa);
+              console.log(
+                `🅧 STATUS='X' gravado nas linhas de controle da NUTAREFA ${nutarefa}`
+              );
 
               await limparProgresso();
               console.log(`🗑️ Progresso da tarefa ${nutarefa} apagado`);
